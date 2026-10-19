@@ -608,15 +608,23 @@ public:
             if (layout.eyes_black) {
                 eye_rgba.assign(size_t(eo.width) * eo.height, 0xFF000000u);
             } else {
-                render::FrameCapture eye_frame;
-                const render::vr::RePoseStats rs =
-                    render::vr::RePose(frame, layout.eyes[e], eye_frame);
-                // the right keeping the left's shared passes, as VrFrame's
+                // as VrFrame draws them: from the capture itself where the
+                // eye can be (vr_shared_eyes), else RePose's copy; the right
+                // keeping the left's shared passes
                 render::RasterOptions eye_o = eo;
-                eye_o.keep_eye_passes = e == 1 && REXCVAR_GET(vr_shared_eyes);
-                eye_o.eye_view_proj = rs.view_proj;
-                drew = render::GpuRenderer::Get().RenderFrame(eye_frame, eye_o, eye_rgba,
-                                                              eye_stats);
+                render::vr::EyeOverride ov;
+                render::FrameCapture eye_frame;
+                const bool shared = REXCVAR_GET(vr_shared_eyes);
+                if (shared && render::vr::EyeOverrideOf(frame, layout.eyes[e], ov)) {
+                    eye_o.eye_override = &ov;
+                    if (ov.ok) eye_o.eye_view_proj = ov.swap[0].from;
+                } else {
+                    eye_o.eye_view_proj =
+                        render::vr::RePose(frame, layout.eyes[e], eye_frame).view_proj;
+                }
+                eye_o.keep_eye_passes = e == 1 && shared;
+                drew = render::GpuRenderer::Get().RenderFrame(
+                    eye_o.eye_override ? frame : eye_frame, eye_o, eye_rgba, eye_stats);
             }
             if (drew)
                 render::WritePng((rex::filesystem::GetExecutableFolder() / "screenshots" /
@@ -711,26 +719,40 @@ public:
                     double repose[3] = {};
                     render::GpuStats first[3], second[3];
                     for (int round = 0; round < 4; round++) {
+                        // as VrFrame: from the capture itself where it can
+                        // (vr_shared_eyes; `repose_ms` is then the
+                        // override's making), else RePose's copy
+                        const bool shared = REXCVAR_GET(vr_shared_eyes);
                         const auto from = std::chrono::steady_clock::now();
+                        render::vr::EyeOverride ov;
                         render::FrameCapture eye_frame;
-                        const render::vr::RePoseStats rs =
-                            render::vr::RePose(frame, layout.eyes[0], eye_frame);
-                        cleared = rs.crowd_cleared;
+                        render::RasterOptions first_o = timed;
+                        if (shared && render::vr::EyeOverrideOf(frame, layout.eyes[0], ov)) {
+                            first_o.eye_override = &ov;
+                            if (ov.ok) first_o.eye_view_proj = ov.swap[0].from;
+                        } else {
+                            first_o.eye_view_proj =
+                                render::vr::RePose(frame, layout.eyes[0], eye_frame).view_proj;
+                        }
                         const double ms = std::chrono::duration<double, std::milli>(
                                               std::chrono::steady_clock::now() - from)
                                               .count();
                         // the second as the right eye's, keeping the passes
                         // the first drew that neither sees (vr_shared_eyes)
-                        render::RasterOptions again = timed;
-                        again.keep_eye_passes = REXCVAR_GET(vr_shared_eyes);
-                        again.eye_view_proj = rs.view_proj;
+                        render::RasterOptions again = first_o;
+                        again.keep_eye_passes = shared;
+                        const render::FrameCapture& drawn = first_o.eye_override ? frame : eye_frame;
                         render::GpuStats gs[2];
-                        draw_eye(eye_frame, timed, gs[0]);
-                        draw_eye(eye_frame, again, gs[1]);
+                        draw_eye(drawn, first_o, gs[0]);
+                        draw_eye(drawn, again, gs[1]);
                         if (round == 0) continue;
                         repose[round - 1] = ms;
                         first[round - 1] = std::move(gs[0]);
                         second[round - 1] = std::move(gs[1]);
+                    }
+                    if (!z) {
+                        render::FrameCapture copy;
+                        cleared = render::vr::RePose(frame, layout.eyes[0], copy).crowd_cleared;
                     }
                     sizes[z] = std::format(
                         "\"size\":[{},{}],\"repose_ms\":{:.3f},\"first\":{},\"second\":{}",

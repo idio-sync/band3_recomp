@@ -9,6 +9,7 @@
 #include "src/Render/shade_model.h"
 #include "src/Render/spot_model.h"
 #include "src/Render/target_premake.h"
+#include "src/Render/vr_pose.h"
 #include "src/Render/shaders/gamma_shaders.gen.h"
 #include "src/Render/shaders/mesh_shaders.gen.h"
 #include "src/Render/shaders/mips_shaders.gen.h"
@@ -342,9 +343,10 @@ int BlendFor(const DrawItem& it, const RasterOptions& o) {
     return it.blend;
 }
 
-bool Drawable(const DrawItem& it) {
-    return it.geom && !it.geom->verts.empty() && it.geom->indices.size() >= 3;
+bool Drawable(const std::shared_ptr<const Geometry>& g) {
+    return g && !g->verts.empty() && g->indices.size() >= 3;
 }
+bool Drawable(const DrawItem& it) { return Drawable(it.geom); }
 
 bool Skinned(const DrawItem& it, const RasterOptions& o) {
     return o.skinning && !it.bones.empty();
@@ -927,6 +929,19 @@ struct GpuRenderer::Impl {
     // frame_bones
     std::vector<uint32_t> instance_count, instance_base;
     std::vector<shade::ShadeParams> shades;  // per draw
+    // RasterOptions::eye_override: per draw, how the eye draws it
+    // (vr::EyeDraw: its matrix, a swap's or kFolded's in eye_folded at
+    // `folded`; the swap whose pose its shade takes; squashed), and a track
+    // draw's cut geometry (null: its own)
+    struct EyeDrawn {
+        uint8_t matrix = 0;
+        int8_t swap = -1, pose = -1;
+        bool squash = false;
+        uint32_t folded = 0;
+    };
+    std::vector<EyeDrawn> eye_drawn;
+    std::vector<Mat4> eye_folded;
+    std::vector<std::shared_ptr<const Geometry>> eye_geom;
     std::vector<uint32_t> cams_seen;
     // per draw, what its diffuse texture and its projected light's s5 sample
     // (kSourceNone: the capture's map, or none)
@@ -3700,6 +3715,29 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
     frame_bones.clear();
     bone_base.assign(frame.draws.size(), 0);
     instance_count.assign(frame.draws.size(), 1);
+    // RasterOptions::eye_override: each draw as the eye draws it (the walk
+    // fills eye_drawn for the draws it keeps)
+    const vr::EyeOverride* const ov = o.eye_override;
+    if (ov) {
+        eye_drawn.assign(frame.draws.size(), EyeDrawn{});
+        eye_folded.clear();
+        eye_geom.assign(frame.draws.size(), nullptr);
+    }
+    auto geom_of = [&](size_t d) -> const std::shared_ptr<const Geometry>& {
+        return ov && eye_geom[d] ? eye_geom[d] : frame.draws[d].geom;
+    };
+    auto vp_of = [&](size_t d) -> const Mat4& {
+        if (!ov) return frame.draws[d].view_proj;
+        const EyeDrawn& e = eye_drawn[d];
+        return e.matrix == vr::EyeDraw::kSwap     ? ov->swap[e.swap].to
+               : e.matrix == vr::EyeDraw::kFolded ? eye_folded[e.folded]
+                                                  : frame.draws[d].view_proj;
+    };
+    auto world_of = [&](size_t d) {
+        Mat4 w = frame.draws[d].world;
+        if (ov && eye_drawn[d].squash) vr::SquashMatrix(w);
+        return w;
+    };
     instance_base.assign(frame.draws.size(), 0);
     InstanceRuns instance_runs;
     shades.resize(frame.draws.size());
@@ -3899,6 +3937,26 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
                 continue;
             // the other VR picture's (soft_raster.h's OnHud)
             if (!run.pass && !DrawnInPart(o, frame, d)) continue;
+            // VR's eye drawn from the capture itself (RasterOptions::
+            // eye_override): as vr::RePose's copy would have it, a track's
+            // draw cut below the picture (left out with nothing left)
+            if (ov) {
+                const vr::EyeDraw e = vr::EyeDrawOf(*ov, frame, it);
+                EyeDrawn& ed = eye_drawn[d];
+                ed.matrix = uint8_t(e.matrix);
+                ed.swap = e.swap;
+                ed.pose = e.pose;
+                ed.squash = e.squash;
+                if (e.matrix == vr::EyeDraw::kFolded) {
+                    ed.folded = uint32_t(eye_folded.size());
+                    eye_folded.push_back(e.view_proj);
+                }
+                if (e.cut) {
+                    eye_geom[d] = vr::CutBelowPicture(
+                        it, e.pose == 0 ? nullptr : shade::ShadeOf(frame, it), e.cut_view_proj);
+                    if (!Drawable(eye_geom[d])) continue;
+                }
+            }
             if (!run.pass && d < frame.post_boundary) st.world_draws++;
             const ShadeState* state = shade::ShadeOf(frame, it);
             // depth volume blurs read a copy of it, not the quad's texture;
@@ -3926,18 +3984,21 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             if (head != InstanceRuns::kNoHead) {
                 if (instance_count[head] == 1) {
                     instance_base[head] = uint32_t(frame_bones.size());
-                    frame_bones.push_back(frame.draws[head].world);
+                    frame_bones.push_back(world_of(head));
                 }
                 instance_count[head]++;
                 instance_count[d] = 0;
-                frame_bones.push_back(it.world);
+                frame_bones.push_back(world_of(d));
                 continue;
             }
             instance_count[d] = 1;
-            use_mesh(it.geom);
+            use_mesh(geom_of(d));
             if (Skinned(it, o)) {
                 bone_base[d] = uint32_t(frame_bones.size());
                 frame_bones.insert(frame_bones.end(), it.bones.begin(), it.bones.end());
+                if (ov && eye_drawn[d].squash)
+                    for (size_t b = bone_base[d]; b < frame_bones.size(); b++)
+                        vr::SquashMatrix(frame_bones[b]);
             }
             // as soft_raster.cpp's Diffuse(): a render target is its pass's
             // target if drawn (this frame or earlier), else guest pixels if
@@ -4468,7 +4529,10 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
     // the back buffer: the world into `scene` (first cleared, alpha 0), the
     // overlay into the picture after the resolve; depth cleared at first and
     // after the resolve, or per new camera in pre-camera captures
-    const BackBufferLayout layout = LayoutBackBuffer(frame);
+    // (an eye's, its world camera's draws drawn with its matrix)
+    const BackBufferLayout layout = ov && ov->ok
+                                        ? LayoutBackBuffer(frame, &ov->swap[0].from, &ov->swap[0].to)
+                                        : LayoutBackBuffer(frame);
     bool clear_overlay_depth = false;
     bool back_begun = false;
     bool resolved = false;
@@ -4886,12 +4950,27 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
     const Rt* pass_rt = nullptr;
     uint32_t pass_layer = 0;  // the layer it draws into (PlanHoist)
 
+    // a draw's shade as the eye sees it (RasterOptions::eye_override): its
+    // swap's point and, a billboard's, axes, as vr::RePose's clone has them
+    auto eye_shade = [&](size_t d, shade::ShadeParams& sp) {
+        if (!ov || eye_drawn[d].pose < 0) return;
+        const freecam::Pose& p = ov->swap[eye_drawn[d].pose].pose;
+        if (sp.flags.x & shade::kShadeModel) sp.eye = {p.eye[0], p.eye[1], p.eye[2], 1};
+        if (sp.flags.x & shade::kShadeBillboard) {
+            sp.billboard[0] = {p.right[0], p.right[1], p.right[2], 0};
+            sp.billboard[1] = {p.up[0], p.up[1], p.up[2], 0};
+            sp.billboard[2] = {p.fwd[0], p.fwd[1], p.fwd[2], 0};
+        }
+    };
+
     // one draw into the open pass; `no_z`: target without depth;
     // `shadow_depth`: into a shadow map, depth alone
     auto draw = [&](size_t d, AlphaMode alpha, bool no_z, bool shadow_depth = false,
                     const DepthMap& depth_map = DepthMap{}, bool overlay_edge = false) {
         const DrawItem& it = frame.draws[d];
-        const Mesh& m = meshes[it.geom.get()];
+        // the eye's (RasterOptions::eye_override): a track's cut, its matrix
+        const std::shared_ptr<const Geometry>& geom = geom_of(d);
+        const Mesh& m = meshes[geom.get()];
         // a run's head draws its instances (InstanceRuns)
         const uint32_t instances = instance_count[d];
         auto count_draw = [&] {
@@ -4930,8 +5009,8 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         // needs only the vertex positions
         if (shadow_depth) {
             VertexUniforms vu{};
-            vu.world = it.world;
-            vu.view_proj = it.view_proj;
+            vu.world = world_of(d);
+            vu.view_proj = vp_of(d);
             if (Skinned(it, o)) {
                 vu.skinned = 1;
                 vu.bone_base = bone_base[d];
@@ -4942,6 +5021,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             SetDepthMap(depth_map, vu.depth_map);
             PackInstancing(instances, instance_base[d], vu.instancing);
             vu.shade = shades[d];
+            eye_shade(d, vu.shade);
             timed_uniform([&] { SDL_PushGPUVertexUniformData(cmd, 0, &vu, sizeof(vu)); });
             if (o.gpu_labels) {
                 DrawLabel l;
@@ -4949,14 +5029,14 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
                 l.index = uint32_t(d);
                 l.mesh = it.mesh;
                 l.target = it.target;
-                l.indices = uint32_t(it.geom->indices.size());
-                l.vertices = uint32_t(it.geom->verts.size());
+                l.indices = uint32_t(geom->indices.size());
+                l.vertices = uint32_t(geom->verts.size());
                 l.bones = uint32_t(it.bones.size());
                 l.instances = instances;
                 label(l);
             }
             timed_first([&] {
-                SDL_DrawGPUIndexedPrimitives(pass, uint32_t(it.geom->indices.size() / 3 * 3),
+                SDL_DrawGPUIndexedPrimitives(pass, uint32_t(geom->indices.size() / 3 * 3),
                                              instances, m.first_index, int32_t(m.first_vertex),
                                              0);
             });
@@ -4992,7 +5072,9 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
                                : 0u,
                            t->width == tx->array->w && t->height == tx->array->h};
         };
-        shade::ShadeParams& sp = shades[d];
+        // a copy: the flags below change, and each eye's pose is its own
+        shade::ShadeParams sp = shades[d];
+        eye_shade(d, sp);
         const ShadeState* state = shade::ShadeOf(frame, it);
         Sampled tex[kNumSlots];
         switch (diffuse_source[d]) {
@@ -5180,8 +5262,8 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         }
 
         VertexUniforms vu{};
-        vu.world = it.world;
-        vu.view_proj = it.view_proj;
+        vu.world = world_of(d);
+        vu.view_proj = vp_of(d);
         if (Skinned(it, o)) {
             vu.skinned = 1;
             vu.bone_base = bone_base[d];
@@ -5254,7 +5336,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
                 hu.flags[0] = (hu.flags[0] & ~kHudMultiply) | kHudHue;
                 SDL_BindGPUGraphicsPipeline(pass, hue);
                 SDL_PushGPUFragmentUniformData(cmd, 0, &hu, sizeof(hu));
-                SDL_DrawGPUIndexedPrimitives(pass, uint32_t(it.geom->indices.size() / 3 * 3),
+                SDL_DrawGPUIndexedPrimitives(pass, uint32_t(geom->indices.size() / 3 * 3),
                                              instances, m.first_index, int32_t(m.first_vertex), 0);
                 SDL_BindGPUGraphicsPipeline(pass, pipeline);
             }
@@ -5268,8 +5350,8 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             l.mesh = it.mesh;
             l.target = it.target;
             l.target_layer = it.target ? pass_layer : 0;
-            l.indices = uint32_t(it.geom->indices.size());
-            l.vertices = uint32_t(it.geom->verts.size());
+            l.indices = uint32_t(geom->indices.size());
+            l.vertices = uint32_t(geom->verts.size());
             l.bones = uint32_t(it.bones.size());
             l.instances = instances;
             l.blend = blend;
@@ -5286,7 +5368,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             label(l);
         }
         timed_first([&] {
-            SDL_DrawGPUIndexedPrimitives(pass, uint32_t(it.geom->indices.size() / 3 * 3),
+            SDL_DrawGPUIndexedPrimitives(pass, uint32_t(geom->indices.size() / 3 * 3),
                                          instances, m.first_index, int32_t(m.first_vertex), 0);
         });
         count_draw();
@@ -5322,7 +5404,7 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
                     }
                     last_cam = it.cam;
                 }
-                if (!Drawable(it) || !DrawnByOptions(frame, it, o)) {
+                if (!Drawable(geom_of(d)) || !DrawnByOptions(frame, it, o)) {
                     st.skipped++;
                     continue;
                 }
@@ -5332,7 +5414,11 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
                 if (!pass) begin_back(clear_depth);
                 float vp[4];
                 DepthMap depth_map;
-                PlaceBackBufferDraw(layout, frame, it, width, height, vp, depth_map);
+                if (ov)
+                    PlaceBackBufferDraw(layout, frame, it, width, height, vp, depth_map, vp_of(d),
+                                        vr::WholePictureCam(*ov, it.cam));
+                else
+                    PlaceBackBufferDraw(layout, frame, it, width, height, vp, depth_map);
                 if (!std::equal(std::begin(vp), std::end(vp), bound_viewport)) {
                     const SDL_GPUViewport v{vp[0], vp[1], vp[2], vp[3], 0.0f, 1.0f};
                     SDL_SetGPUViewport(pass, &v);

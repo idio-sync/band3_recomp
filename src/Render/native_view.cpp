@@ -1477,23 +1477,35 @@ class Renderer {
         const int slot[2] = {left_slot >= 0 ? left_slot : GpuRenderer::EyeSlot(0),
                              GpuRenderer::EyeSlot(1)};
         vr::Eye eye[2];
-        std::shared_ptr<FrameCapture> eye_cap[2];
+        std::shared_ptr<const FrameCapture> eye_cap[2];
         Drawn d[2];
         double repose_ms[2] = {0, 0};
-        // vr_shared_eyes: the right eye keeps the left's drawing of the
-        // texture passes neither sees itself (RasterOptions::keep_eye_passes)
+        // vr_shared_eyes: each eye drawn from the capture itself
+        // (RasterOptions::eye_override) rather than RePose's copy, where it
+        // can be (not with the eyes' own dark: the window, a fade), and the
+        // right keeping the left's drawing of the texture passes neither sees
+        // itself (RasterOptions::keep_eye_passes)
         const bool shared = REXCVAR_GET(vr_shared_eyes);
         for (int e = 0; e < 2; e++) {
             eye[e] = layout.eyes[e];
             const auto repose_start = Clock::now();
-            eye_cap[e] = std::make_shared<FrameCapture>();
-            const vr::RePoseStats rs = vr::RePose(*cap, eye[e], *eye_cap[e]);
+            RasterOptions eye_o = eo;
+            // the matrix the eye moves, as the frame it draws has it
+            Mat4 moved{};
+            if (shared && vr::EyeOverrideOf(*cap, eye[e], vr_override_[e])) {
+                eye_cap[e] = cap;
+                eye_o.eye_override = &vr_override_[e];
+                if (vr_override_[e].ok) moved = vr_override_[e].swap[0].from;
+            } else {
+                auto copy = std::make_shared<FrameCapture>();
+                moved = vr::RePose(*cap, eye[e], *copy).view_proj;
+                eye_cap[e] = std::move(copy);
+            }
             repose_ms[e] =
                 std::chrono::duration<double, std::milli>(Clock::now() - repose_start).count();
-            RasterOptions eye_o = eo;
             if (e == 1 && shared && d[0].drew_output) {
                 eye_o.keep_eye_passes = true;
-                eye_o.eye_view_proj = rs.view_proj;
+                eye_o.eye_view_proj = moved;
             }
             d[e].drew_output = GpuRenderer::Get().RenderFrameToOutput(*eye_cap[e], eye_o, slot[e],
                                                                       d[e].out, d[e].gs);
@@ -1693,6 +1705,9 @@ class Renderer {
     vr::Anchor vr_anchor_;
     // the song's track cameras held still (vr_pose.h's TrackHold)
     vr::TrackHold vr_track_hold_;
+    // each eye's override of the capture (vr_shared_eyes), kept between
+    // frames so its crowd list isn't allocated again each frame
+    vr::EyeOverride vr_override_[2];
 
     // One fence check; when finished, marks the slot finished and un-holds
     // the worker.

@@ -8,6 +8,7 @@
 #include <cstring>
 #include <memory>
 #include "src/Render/free_cam.h"
+#include "src/Render/shade_model.h"
 #include "src/Render/soft_raster.h"
 #include "src/Render/vr_pose.h"
 
@@ -1705,4 +1706,116 @@ TEST_CASE("the eyes are drawn smaller where vr_eye_scale says, from a fixed view
     CHECK(vr::EyeDrawSize(1440, 0.5f) == 720);
     CHECK(vr::EyeDrawSize(10, 0.5f) == 16);
     CHECK(vr::EyeDrawSize(1440, 0.0f) == 1440);
+}
+
+namespace {
+
+// `in` drawn through `eye`'s override as the GPU applies it (EyeDrawOf),
+// against RePose's copy: each draw's matrix, world, bones, geometry and its
+// shade's eye and billboard axes the same, bit for bit
+void CheckOverrideIsRePose(const FrameCapture& in, const vr::Eye& eye) {
+    FrameCapture out;
+    vr::RePose(in, eye, out);
+    vr::EyeOverride v;
+    REQUIRE(vr::EyeOverrideOf(in, eye, v));
+    for (size_t i = 0; i < in.draws.size(); i++) {
+        CAPTURE(i);
+        const DrawItem& d = in.draws[i];
+        const DrawItem& want = out.draws[i];
+        const vr::EyeDraw e = vr::EyeDrawOf(v, in, d);
+        CHECK(std::memcmp(&vr::EyeViewProj(v, e, d), &want.view_proj, sizeof(Mat4)) == 0);
+        Mat4 world = d.world;
+        if (e.squash) vr::SquashMatrix(world);
+        CHECK(std::memcmp(&world, &want.world, sizeof(Mat4)) == 0);
+        const std::shared_ptr<const Geometry> g =
+            e.cut ? vr::CutBelowPicture(d, e.pose == 0 ? nullptr : shade::ShadeOf(in, d),
+                                        e.cut_view_proj)
+                  : d.geom;
+        CHECK(g == want.geom);
+        // no shade to clone: none to take the pose (PackShade has no eye)
+        if (e.pose < 0 || d.shade < 0) {
+            CHECK(want.shade == d.shade);
+            continue;
+        }
+        const freecam::Pose& p = v.swap[e.pose].pose;
+        REQUIRE(want.shade >= 0);
+        const ShadeState& clone = out.shades[size_t(want.shade)];
+        CHECK(std::memcmp(clone.eye, p.eye, sizeof(clone.eye)) == 0);
+        if (clone.Option(shader_opt::kBillboard))
+            for (int k = 0; k < 3; k++) {
+                CHECK(clone.Vs(16 + k)[0] == p.right[k]);
+                CHECK(clone.Vs(16 + k)[2] == p.fwd[k]);
+            }
+    }
+    // the track cameras' viewports the whole picture, the rest as they were
+    for (size_t c = 0; c < out.cameras.size(); c++) {
+        const CameraView& now = out.cameras[c];
+        CAPTURE(now.cam);
+        if (vr::WholePictureCam(v, now.cam)) {
+            CHECK(now.viewport[0] == 0);
+            CHECK(now.viewport[2] == float(now.target_w));
+            CHECK(now.viewport[3] == float(now.target_h));
+        } else {
+            CHECK(std::memcmp(now.viewport, in.cameras[c].viewport, sizeof(now.viewport)) == 0);
+        }
+    }
+}
+
+}  // namespace
+
+TEST_CASE("an eye's override of the capture draws it as RePose's copy does") {
+    Mat4 vp_a, vp_hud;
+    FrameCapture in = Frame(vp_a, vp_hud);
+    // a crowd's card by the eye, cleared, and one far off
+    in.mesh_owners = {{77, 9, kOwnerCrowd}};
+    in.draws[2].mesh = 77;
+    in.draws[2].geom = Rect(-1, 1, -1, 1);
+    in.draws[2].world.m[3][0] = 50;
+    in.draws[2].world.m[3][1] = -1250;
+    in.draws[0].mesh = 77;
+    in.draws[0].geom = Rect(-1, 1, -1, 1);
+    vr::Eye eye;
+    const float at_eye[3] = {50, -1250, 520}, look[3] = {0, -540, 290};
+    eye.pose = freecam::LookAt(at_eye, look);
+    eye.fov = {-0.8f, 0.8f, 0.8f, -0.8f};
+    eye.crowd_clear = 60;
+    CheckOverrideIsRePose(in, eye);
+    vr::EyeOverride v;
+    REQUIRE(vr::EyeOverrideOf(in, eye, v));
+    CHECK(vr::EyeDrawOf(v, in, in.draws[2]).squash);
+    CHECK_FALSE(vr::EyeDrawOf(v, in, in.draws[0]).squash);
+    // the eye's own dark needs RePose's copy
+    eye.fade = 0.5f;
+    CHECK_FALSE(vr::EyeOverrideOf(in, eye, v));
+    eye.fade = 0;
+    eye.dark_count = 1;
+    eye.dark_alpha = 1;
+    CHECK_FALSE(vr::EyeOverrideOf(in, eye, v));
+
+    // a song's track, its gem folded into its matrix and its surface cut
+    const float e1[3] = {0, -91.82f, 22.6f};
+    const Mat4 vp = TrackVp(e1, 0, 7, TrackProj(36.56f, 30, 224));
+    std::vector<SongCam> one = {
+        {0x25492B68, vp, {0, 0, 998, 720}, {0, 1}, 2, Rect(-9.8f, 9.8f, -50, 270)}};
+    HudFadePause(one, false);
+    FrameCapture f = SongFrame(one);
+    const uint32_t first = f.post_boundary + 1;
+    Mat4 move{};
+    for (int i = 0; i < 4; i++) move.m[i][i] = 1;
+    move.m[3][1] = 40;
+    f.draws[first + 1].view_proj = freecam::Mul(move, vp);
+    f.draws[first + 1].geom = Rect(-1, 1, -1, 1);
+    const vr::TrackCams t = vr::TrackCamerasOf(f);
+    REQUIRE(t.count == 1);
+    vr::TrackPlace p[vr::kMaxTrackCams];
+    REQUIRE(vr::PlaceTracks(t, StandingHead(), vr::TrackLayout{}, p) == 1);
+    vr::Eye track_eye;
+    track_eye.fov = {-0.9f, 0.9f, 0.9f, -0.9f};
+    track_eye.track_count = 1;
+    track_eye.tracks[0] = vr::TrackEye(StandingHead(), track_eye.fov, p[0], 30);
+    CheckOverrideIsRePose(f, track_eye);
+    REQUIRE(vr::EyeOverrideOf(f, track_eye, v));
+    CHECK(vr::EyeDrawOf(v, f, f.draws[first + 1]).matrix == vr::EyeDraw::kFolded);
+    CHECK(vr::EyeDrawOf(v, f, f.draws[first]).cut);
+    CHECK(vr::WholePictureCam(v, 0x25492B68));
 }

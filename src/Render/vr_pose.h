@@ -22,7 +22,9 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
+#include <memory>
 #include <string>
+#include <vector>
 
 #include "src/Render/camera_cut.h"
 #include "src/Render/frame_compose.h"
@@ -219,6 +221,90 @@ struct RePoseStats {
 // is left unchanged. Without a perspective world camera, the world's draws
 // are left as they are.
 RePoseStats RePose(const FrameCapture& in, const Eye& eye, FrameCapture& out);
+
+// RePose as an override of the capture itself (RasterOptions::eye_override):
+// what RePose changes in its copy, which the GPU renderer applies to the
+// shared capture's draws as it plans and records them (gpu_view.cpp's
+// Render), so no eye copies the frame and both eyes can be drawn from one
+// plan. RePose is that copy with these applied (EyeDrawOf), and the eye's
+// own dark, whose draws the override can't add.
+//
+// One camera's matrix as the eye sees it: draws drawn with `from` get `to`
+// and their shades `pose`'s point and axes; a track camera's (`cam`) other
+// matrices fold into it (FoldedInto, through from_inv) and its draws are cut
+// below the picture (CutBelowPicture)
+struct ViewSwap {
+    Mat4 from{}, to{};
+    freecam::Pose pose{};
+    uint32_t cam = 0;  // a track camera's, 0 the world's
+    bool inverted = false;
+    double from_inv[4][4] = {};
+};
+
+struct EyeOverride {
+    bool ok = false;  // a perspective world camera: swap[0] is its (RePoseStats::ok)
+    uint32_t cam = 0;
+    freecam::Pose game{};
+    // the world's (with ok), then the eye's track cameras' from `tracks` on
+    int count = 0, tracks = 0;
+    ViewSwap swap[1 + kMaxTrackCams];
+    // Eye::crowd_clear: the crowds' meshes (sorted) and the eye's point
+    std::vector<uint32_t> crowd;
+    float crowd_clear = 0;
+    float eye[3] = {};
+    // the eye draws its own dark (Eye::fade, Eye::dark): RePose's copy only
+    bool dark = false;
+};
+
+// `eye`'s EyeOverride of `in`; false where only RePose's copy will do (its dark)
+bool EyeOverrideOf(const FrameCapture& in, const Eye& eye, EyeOverride& out);
+
+// What an eye does to one of the capture's draws (RePose's steps for it, in
+// its order: the world camera's, then its track camera's)
+struct EyeDraw {
+    // the view_proj it's drawn with: its own, swap `swap`'s `to`, or
+    // `view_proj` (a track draw's own folded in, FoldedInto)
+    enum Matrix : uint8_t { kOwn, kSwap, kFolded };
+    Matrix matrix = kOwn;
+    int8_t swap = -1;
+    // the swap whose pose its shade takes (RePose's clone), -1 its own
+    int8_t pose = -1;
+    // within crowd_clear: drawn as a point (RePose's SquashDraw)
+    bool squash = false;
+    // a track camera's: cut below the picture (CutBelowPicture with
+    // cut_view_proj, the matrix it had then)
+    bool cut = false;
+    // a track camera's draw neither matched nor folded (left as it was)
+    bool unmoved = false;
+    Mat4 view_proj{};      // kFolded's
+    Mat4 cut_view_proj{};  // cut's
+};
+EyeDraw EyeDrawOf(const EyeOverride& v, const FrameCapture& in, const DrawItem& d);
+
+// the matrix EyeDraw `e` draws `d` with
+inline const Mat4& EyeViewProj(const EyeOverride& v, const EyeDraw& e, const DrawItem& d) {
+    return e.matrix == EyeDraw::kSwap     ? v.swap[e.swap].to
+           : e.matrix == EyeDraw::kFolded ? e.view_proj
+                                          : d.view_proj;
+}
+
+// `d` (as its shade `s` and its matrix `vp` then have it) cut where the game's
+// picture ends below: clip y = -w through vp, in the mesh's own space; its
+// own geometry if skinned, a billboard, or nothing is below (EyeDraw::cut)
+std::shared_ptr<const Geometry> CutBelowPicture(const DrawItem& d, const ShadeState* s,
+                                                const Mat4& vp);
+
+// `d`'s world (or a bone) without its axes: drawn as a point where it stands,
+// every triangle empty (EyeDraw::squash)
+void SquashMatrix(Mat4& m);
+
+// whether `cam` is one of `v`'s track cameras, whose draws get the whole
+// picture (RePose's cameras' viewports)
+inline bool WholePictureCam(const EyeOverride& v, uint32_t cam) {
+    for (int i = v.tracks; i < v.count; i++)
+        if (v.swap[i].cam == cam) return true;
+    return false;
+}
 
 // `g` with its triangles cut to plane . (x, y, z, 1) >= 0 (in its own
 // space), new corners between the old; `g` itself if nothing is below it.

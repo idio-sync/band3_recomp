@@ -80,6 +80,9 @@ enum class BackBufferPart : uint8_t { kAll, kEyes, kHud };
 
 struct RasterOptions;
 struct DrawItem;
+namespace vr {
+struct EyeOverride;
+}
 // whether a full-picture overlay draw lies within RasterOptions::overlay_cut;
 // it's then drawn unstretched, only in the 16:9 frame's columns
 bool InOverlayCut(const DrawItem& it, const RasterOptions& o);
@@ -253,6 +256,13 @@ struct RasterOptions {
     // it makes, drawn with the same options (gpu_view.h's KeepsEyePass)
     bool keep_eye_passes = false;
     Mat4 eye_view_proj{};
+    // GPU, VR's eye drawn from the capture itself rather than vr::RePose's
+    // copy of it (vr_pose.h's EyeOverride, from EyeOverrideOf): each draw as
+    // the copy would have it (EyeDrawOf: its matrix, its shade's eye and
+    // billboard axes, the crowd near the eye squashed, the tracks cut below
+    // the picture and given all of it). Null draws the capture as it is. The
+    // CPU (Rasterize) draws RePose's copies only.
+    const vr::EyeOverride* eye_override = nullptr;
     // GPU: frames between world draws (WorldPeriod), how long meshes and
     // textures are kept (ResidencyKeepFrames) so the world's aren't resent.
     // 0 lets them go once a frame doesn't draw them.
@@ -389,11 +399,19 @@ struct BackBufferLayout {
     float ref_proj[2] = {0, 0};  // a and b of z = a w + b
 };
 BackBufferLayout LayoutBackBuffer(const FrameCapture& frame);
+// as if the reference camera's draws with `from` had `to` (VR's eye drawn
+// from the shared capture: RasterOptions::eye_override)
+BackBufferLayout LayoutBackBuffer(const FrameCapture& frame, const Mat4* from, const Mat4* to);
 
 // viewport is x, y, w, h in a width x height picture
 void PlaceBackBufferDraw(const BackBufferLayout& layout, const FrameCapture& frame,
                          const DrawItem& d, uint32_t width, uint32_t height, float viewport[4],
                          DepthMap& depth);
+// as if `d` were drawn with `view_proj` and, with `whole`, its camera's
+// viewport were the whole picture (RasterOptions::eye_override)
+void PlaceBackBufferDraw(const BackBufferLayout& layout, const FrameCapture& frame,
+                         const DrawItem& d, uint32_t width, uint32_t height, float viewport[4],
+                         DepthMap& depth, const Mat4& view_proj, bool whole);
 
 // Texture pass p's target size: the game's (Pass::width, height), times
 // target_scale for screen pictures (kTexTypeDepthVolume, kTexTypeDensityMap,

@@ -180,24 +180,25 @@ std::shared_ptr<const Geometry> CutAtPlane(const std::shared_ptr<const Geometry>
     return cut;
 }
 
-namespace {
-
-// Draw `d` of a track camera cut where the game's picture ends below (clip
-// y = -w, the bottom of the camera's viewport, through its captured
-// matrix), so the track before the strikeline ends where the game shows it
-// end rather than reaching under the head. In the mesh's own space: the
-// plane through its world. Skinned and billboard draws are left whole.
-void CutBelowPicture(DrawItem& d, const ShadeState* s) {
-    if (!d.bones.empty() || (s && s->Option(shader_opt::kBillboard))) return;
+// A track camera's draw cut where the game's picture ends below (clip y =
+// -w, the bottom of the camera's viewport, through its captured matrix), so
+// the track before the strikeline ends where the game shows it end rather
+// than reaching under the head. In the mesh's own space: the plane through
+// its world. Skinned and billboard draws are left whole.
+std::shared_ptr<const Geometry> CutBelowPicture(const DrawItem& d, const ShadeState* s,
+                                                const Mat4& vp) {
+    if (!d.bones.empty() || (s && s->Option(shader_opt::kBillboard))) return d.geom;
     float world_plane[4];
-    for (int i = 0; i < 4; i++) world_plane[i] = d.view_proj.m[i][1] + d.view_proj.m[i][3];
+    for (int i = 0; i < 4; i++) world_plane[i] = vp.m[i][1] + vp.m[i][3];
     float plane[4];
     for (int i = 0; i < 4; i++) {
         plane[i] = 0;
         for (int j = 0; j < 4; j++) plane[i] += d.world.m[i][j] * world_plane[j];
     }
-    d.geom = CutAtPlane(d.geom, plane);
+    return CutAtPlane(d.geom, plane);
 }
+
+namespace {
 
 // a quad's four corners and two triangles onto `g`
 void AddQuad(Geometry& g, const float corners[4][3]) {
@@ -328,81 +329,133 @@ bool NearEye(const DrawItem& d, const float eye[3], float radius) {
     return dx * dx + dy * dy < radius * radius;
 }
 
-// `d` drawn as a point where it stands: its world (or each bone) without its
-// axes, so every triangle is empty, while the draw and its pass stay
-void SquashDraw(DrawItem& d) {
+}  // namespace
+
+void SquashMatrix(Mat4& m) {
     for (int r = 0; r < 3; r++)
-        for (int c = 0; c < 4; c++) d.world.m[r][c] = 0;
-    for (Mat4& b : d.bones)
-        for (int r = 0; r < 3; r++)
-            for (int c = 0; c < 4; c++) b.m[r][c] = 0;
+        for (int c = 0; c < 4; c++) m.m[r][c] = 0;
 }
 
-}  // namespace
+bool EyeOverrideOf(const FrameCapture& in, const Eye& eye, EyeOverride& out) {
+    // the crowd list's room kept from the last
+    std::vector<uint32_t> crowd = std::move(out.crowd);
+    crowd.clear();
+    out = EyeOverride{};
+    out.crowd = std::move(crowd);
+    const WorldCamera cam = WorldCameraOf(in);
+    Mat4 proj{};
+    if (cam.valid && freecam::Decompose(cam.view_proj, out.game, proj)) {
+        out.ok = true;
+        out.cam = cam.cam;
+        ViewSwap& w = out.swap[out.count++];
+        w.from = cam.view_proj;
+        w.to = freecam::Mul(EyeView(eye), EyeProjection(proj, eye.fov));
+        w.pose = eye.pose;
+        // the crowds' meshes, for Eye::crowd_clear
+        if (eye.crowd_clear > 0) {
+            for (const MeshOwner& o : in.mesh_owners)
+                if (o.kind == kOwnerCrowd) out.crowd.push_back(o.mesh);
+            std::sort(out.crowd.begin(), out.crowd.end());
+            out.crowd_clear = eye.crowd_clear;
+            for (int c = 0; c < 3; c++) out.eye[c] = eye.pose.eye[c];
+        }
+    }
+    out.tracks = out.count;
+    for (int t = 0; t < eye.track_count && t < kMaxTrackCams; t++) {
+        const TrackView& v = eye.tracks[t];
+        ViewSwap& s = out.swap[out.count++];
+        s.from = v.old_vp;
+        s.to = v.view_proj;
+        s.pose = v.pose;
+        s.cam = v.cam;
+        s.inverted = Inverse(v.old_vp, s.from_inv);
+    }
+    out.dark = eye.fade > 0 || (eye.dark_count > 0 && eye.dark_alpha > 0);
+    return !out.dark;
+}
+
+EyeDraw EyeDrawOf(const EyeOverride& v, const FrameCapture& in, const DrawItem& d) {
+    EyeDraw e;
+    // the world camera's draws, in any pass
+    if (v.ok && std::memcmp(&d.view_proj, &v.swap[0].from, sizeof(Mat4)) == 0) {
+        e.matrix = EyeDraw::kSwap;
+        e.swap = 0;
+        e.pose = 0;
+        e.squash = !v.crowd.empty() && std::binary_search(v.crowd.begin(), v.crowd.end(), d.mesh) &&
+                   NearEye(d, v.eye, v.crowd_clear);
+    }
+    // each track camera's, as the eye sees the track, over the whole
+    // picture; a draw with its transform in its matrix keeps it
+    // (FoldedInto); its shade the track's eye's unless the world's took it
+    if (d.target != 0 || d.rect_shader >= 0) return e;
+    for (int t = v.tracks; t < v.count; t++) {
+        const ViewSwap& s = v.swap[t];
+        if (d.cam != s.cam) continue;
+        const Mat4& now = EyeViewProj(v, e, d);
+        e.cut = true;
+        e.cut_view_proj = now;
+        if (std::memcmp(&now, &s.from, sizeof(Mat4)) == 0) {
+            e.matrix = EyeDraw::kSwap;
+            e.swap = int8_t(t);
+        } else {
+            Mat4 folded = now;
+            if (!s.inverted || !FoldedInto(folded, s.from_inv, s.to)) {
+                e.unmoved = true;
+                continue;
+            }
+            e.matrix = EyeDraw::kFolded;
+            e.view_proj = folded;
+        }
+        if (e.pose < 0) e.pose = int8_t(t);
+    }
+    return e;
+}
 
 RePoseStats RePose(const FrameCapture& in, const Eye& eye, FrameCapture& out) {
     RePoseStats st;
     out = in;
-    const WorldCamera cam = WorldCameraOf(in);
-    freecam::Pose game{};
-    Mat4 proj{};
-    if (cam.valid && freecam::Decompose(cam.view_proj, game, proj)) {
-        st.ok = true;
-        st.cam = cam.cam;
-        st.game = game;
-        const Mat4 old_vp = cam.view_proj;
-        const Mat4 new_vp = freecam::Mul(EyeView(eye), EyeProjection(proj, eye.fov));
-        st.view_proj = new_vp;
-        std::vector<int32_t> clone(in.shades.size(), -1);
-        // the crowds' meshes, for Eye::crowd_clear
-        std::vector<uint32_t> crowd;
-        if (eye.crowd_clear > 0) {
-            for (const MeshOwner& o : in.mesh_owners)
-                if (o.kind == kOwnerCrowd) crowd.push_back(o.mesh);
-            std::sort(crowd.begin(), crowd.end());
-        }
-        for (DrawItem& d : out.draws) {
-            if (std::memcmp(&d.view_proj, &old_vp, sizeof(Mat4)) != 0) continue;
-            d.view_proj = new_vp;
-            st.draws_moved++;
-            st.shades_cloned += CloneShade(in, out, d, eye.pose, clone);
-            if (!crowd.empty() && std::binary_search(crowd.begin(), crowd.end(), d.mesh) &&
-                NearEye(d, eye.pose.eye, eye.crowd_clear)) {
-                SquashDraw(d);
-                st.crowd_cleared++;
-            }
-        }
+    EyeOverride v;
+    EyeOverrideOf(in, eye, v);
+    st.ok = v.ok;
+    if (v.ok) {
+        st.cam = v.cam;
+        st.game = v.game;
+        st.view_proj = v.swap[0].to;
     }
-    // each track camera's draws as the eye sees the track, its shades their
-    // own clones (a track's eye isn't the world's), over the whole picture;
-    // a draw with its transform in its matrix keeps it (FoldedInto)
-    for (int t = 0; t < eye.track_count && t < kMaxTrackCams; t++) {
-        const TrackView& v = eye.tracks[t];
-        std::vector<int32_t> clone(in.shades.size(), -1);
-        double old_inv[4][4];
-        bool inverted = false, tried = false;
-        for (DrawItem& d : out.draws) {
-            if (d.cam != v.cam || d.target != 0 || d.rect_shader >= 0) continue;
-            CutBelowPicture(d, d.shade >= 0 && size_t(d.shade) < in.shades.size()
-                                   ? &in.shades[size_t(d.shade)]
-                                   : nullptr);
-            if (std::memcmp(&d.view_proj, &v.old_vp, sizeof(Mat4)) == 0) {
-                d.view_proj = v.view_proj;
-            } else {
-                if (!tried) {
-                    tried = true;
-                    inverted = Inverse(v.old_vp, old_inv);
-                }
-                if (!inverted || !FoldedInto(d.view_proj, old_inv, v.view_proj)) {
-                    st.track_unmoved++;
-                    continue;
-                }
-            }
-            st.track_draws++;
-            st.shades_cloned += CloneShade(in, out, d, v.pose, clone);
+    std::vector<EyeDraw> e(in.draws.size());
+    for (size_t i = 0; i < in.draws.size(); i++) {
+        e[i] = EyeDrawOf(v, in, in.draws[i]);
+        DrawItem& d = out.draws[i];
+        if (e[i].cut) {
+            // the shade as the track's step found it: none where the
+            // world's cloned it
+            const ShadeState* s = e[i].pose == 0 || d.shade < 0 ||
+                                          size_t(d.shade) >= in.shades.size()
+                                      ? nullptr
+                                      : &in.shades[size_t(d.shade)];
+            d.geom = CutBelowPicture(d, s, e[i].cut_view_proj);
         }
+        d.view_proj = EyeViewProj(v, e[i], in.draws[i]);
+        if (e[i].squash) {
+            SquashMatrix(d.world);
+            for (Mat4& b : d.bones) SquashMatrix(b);
+            st.crowd_cleared++;
+        }
+        if (e[i].pose == 0) st.draws_moved++;
+        else if (e[i].pose > 0) st.track_draws++;
+        if (e[i].unmoved) st.track_unmoved++;
+    }
+    // their shades cloned with the eye's point and axes, the world's first,
+    // then each track's (a track's eye isn't the world's)
+    for (int s = 0; s < v.count; s++) {
+        std::vector<int32_t> clone(in.shades.size(), -1);
+        for (size_t i = 0; i < in.draws.size(); i++)
+            if (e[i].pose == s)
+                st.shades_cloned += CloneShade(in, out, out.draws[i], v.swap[s].pose, clone);
+    }
+    for (int t = v.tracks; t < v.count; t++) {
         for (CameraView& c : out.cameras) {
-            if (c.cam != v.cam) continue;
+            if (c.cam != v.swap[t].cam) continue;
             c.viewport[0] = c.viewport[1] = 0;
             c.viewport[2] = float(c.target_w);
             c.viewport[3] = float(c.target_h);

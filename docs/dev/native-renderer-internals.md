@@ -405,7 +405,28 @@ What each does, how it was measured and why it defaults as it does. The
   (small_club_01: 1 of 4-6), its recording 1.8-2.3 ms down to 0.55-0.9 and its GPU
   2.2-3.6 ms to 0.8-1.7; through the window 9-10 of 12-13 passes, 0.1-0.2 ms less of
   each. The right eye's pictures are the same as without it, pixel for pixel, on all
-  seventeen captures. The overlay's draws (`soft_raster.h`'s `OnHud`, from
+  seventeen captures.
+  Also with `vr_shared_eyes`, an eye without its own dark (a fixed viewpoint, not
+  fading) is drawn from the capture itself rather than `RePose`'s copy of it
+  (`RasterOptions::eye_override`): `vr_pose.h`'s `EyeOverrideOf` sets out what the copy
+  would change (`ViewSwap`s: the world camera's matrix and the eye's pose, each track
+  camera's, with its inverse for the folded ones; the crowds' meshes for
+  `vr_crowd_clear`), `EyeDrawOf` what that is for one draw (its matrix: its own, a
+  swap's or folded; the swap whose pose its shade takes; squashed; a track's draw cut
+  below the picture), and `Render`'s walk applies it as it plans each draw kept
+  (`eye_drawn`, the cut geometry in `eye_geom`): the instances' worlds and the bones
+  squashed, the matrix at recording, the shade's eye point and billboard axes patched
+  into the draw's copy of its `ShadeParams` (which no longer changes `shades[d]`), the
+  back buffer's layout and placement through the eye's matrix and the tracks' whole
+  picture (`LayoutBackBuffer`'s and `PlaceBackBufferDraw`'s overloads). `RePose` is now
+  the copy with `EyeDrawOf` applied, so the two can't drift; the CPU (`Rasterize`,
+  `native_view_replay --track-at`) draws its copies as before (replay's eyes the same,
+  pixel for pixel). The eyes' dark (the window, a fade) adds draws, which the override
+  can't: those eyes take `RePose`'s copy. On the twelve captures the override took
+  0.02-0.22 ms to make an eye against `RePose`'s 0.7-1.45, the walk 0.1-0.3 ms more
+  (`EyeDrawOf`, the crowd's distances), and the eyes are the same pictures, pixel for
+  pixel; the two eyes' CPU at 2644x2644 went from a mean 5.2 to 4.2 ms a frame
+  (6.4 before the passes were shared), the GPU 3.5 (4.7). The overlay's draws (`soft_raster.h`'s `OnHud`, from
   `vr_pose.h`'s `HudBoundary`: `post_boundary`, or 0 for a frame the eyes can't see) are
   drawn alone as the HUD panel (`BackBufferPart::kHud`): transparent black, alpha as
   coverage, premultiplied (`native_view_replay --overlay-only`, `--split-check`). Draws that

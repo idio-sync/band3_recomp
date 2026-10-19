@@ -1639,6 +1639,10 @@ bool PerspectiveZ(const Mat4& m, float& a, float& b) {
 }  // namespace
 
 BackBufferLayout LayoutBackBuffer(const FrameCapture& frame) {
+    return LayoutBackBuffer(frame, nullptr, nullptr);
+}
+
+BackBufferLayout LayoutBackBuffer(const FrameCapture& frame, const Mat4* from, const Mat4* to) {
     BackBufferLayout l;
     l.cameras = !frame.cameras.empty();
     if (!l.cameras) return l;
@@ -1662,8 +1666,10 @@ BackBufferLayout LayoutBackBuffer(const FrameCapture& frame) {
         const DrawItem& d = frame.draws[i];
         if (d.cam != best || d.target || d.rect_shader >= 0) continue;
         const CameraView& c = *CameraOf(frame, best);
+        const Mat4& vp =
+            from && to && std::memcmp(&d.view_proj, from, sizeof(Mat4)) == 0 ? *to : d.view_proj;
         float a, b;
-        if (!PerspectiveZ(d.view_proj, a, b)) return l;
+        if (!PerspectiveZ(vp, a, b)) return l;
         const float range = c.zrange[1] - c.zrange[0];
         // d = B + A / w
         l.ref_a = -range * b;
@@ -1681,6 +1687,12 @@ BackBufferLayout LayoutBackBuffer(const FrameCapture& frame) {
 
 void PlaceBackBufferDraw(const BackBufferLayout& l, const FrameCapture& frame, const DrawItem& d,
                          uint32_t width, uint32_t height, float vp[4], DepthMap& depth) {
+    PlaceBackBufferDraw(l, frame, d, width, height, vp, depth, d.view_proj, false);
+}
+
+void PlaceBackBufferDraw(const BackBufferLayout& l, const FrameCapture& frame, const DrawItem& d,
+                         uint32_t width, uint32_t height, float vp[4], DepthMap& depth,
+                         const Mat4& view_proj, bool whole) {
     vp[0] = vp[1] = 0;
     vp[2] = float(width);
     vp[3] = float(height);
@@ -1695,15 +1707,18 @@ void PlaceBackBufferDraw(const BackBufferLayout& l, const FrameCapture& frame, c
     if (!c) return;
     if (c->target_w && c->target_h) {
         const float sx = float(width) / float(c->target_w), sy = float(height) / float(c->target_h);
-        vp[0] = c->viewport[0] * sx;
-        vp[1] = c->viewport[1] * sy;
-        vp[2] = c->viewport[2] * sx;
-        vp[3] = c->viewport[3] * sy;
+        // the whole picture as a camera's own viewport would be, scaled alike
+        const float whole_vp[4] = {0, 0, float(c->target_w), float(c->target_h)};
+        const float* cv = whole ? whole_vp : c->viewport;
+        vp[0] = cv[0] * sx;
+        vp[1] = cv[1] * sy;
+        vp[2] = cv[2] * sx;
+        vp[3] = cv[3] * sy;
     }
     if (!l.mapped) return;
     const float range = c->zrange[1] - c->zrange[0];
     float a, b;
-    if (PerspectiveZ(d.view_proj, a, b)) {
+    if (PerspectiveZ(view_proj, a, b)) {
         // the reference's own: 1/w as it is
         if (a == l.ref_proj[0] && b == l.ref_proj[1] && c->zrange[0] == l.ref_zrange[0] &&
             c->zrange[1] == l.ref_zrange[1])
