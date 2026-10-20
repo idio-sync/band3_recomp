@@ -1,3 +1,4 @@
+#include <rex/filesystem.h>
 #include <rex/hook.h>
 #include <rex/logging.h>
 #include <rex/runtime.h>
@@ -12,6 +13,7 @@
 #include <system_error>
 #include <vector>
 #include "src/Game/SongCache.h"
+#include "src/Game/song_cache_files.h"
 
 // Which song cache the game mounted, from CacheMgrXbox::MountAsync, as
 // RB3Enhanced finds it (source/xbox360_content.c), and deleting it.
@@ -36,8 +38,6 @@ constexpr const char* kPendingFile = "pending_deletes.txt";
 std::mutex g_mutex;
 std::string g_file_name;  // the mounted song cache's, or empty
 uint32_t g_content_type = 0;
-
-bool IsSongCache(const std::string& name) { return name == "songcache" || name == "rbdxcache"; }
 
 std::string Hex(uint32_t value) {
     char text[9];
@@ -126,17 +126,36 @@ void DeletePending(const std::filesystem::path& user_data_root) {
 // CacheMgrXbox::MountAsync(CacheMgrXbox*, CacheIDXbox*, Cache**, void*)
 extern "C" REX_FUNC(CacheMgrXbox__MountAsync)
 {
-    const uint32_t cache_id = ctx.r4.u32;
-    __imp__CacheMgrXbox__MountAsync(ctx, base);
-    if (!cache_id) return;
-
     using namespace band3::song_cache;
-    const uint32_t data = cache_id + kCacheID_ContentData;
-    const char* raw = rex::memory::GuestPtr<const char*>(base, data + kContentData_FileName);
-    const std::string file_name(raw, strnlen(raw, kFileNameLength));
+    const uint32_t cache_id = ctx.r4.u32;
+    std::string file_name;
+    uint32_t content_type = 0;
+    if (cache_id) {
+        const uint32_t data = cache_id + kCacheID_ContentData;
+        const char* raw = rex::memory::GuestPtr<const char*>(base, data + kContentData_FileName);
+        file_name.assign(raw, strnlen(raw, kFileNameLength));
+        content_type = *rex::memory::GuestPtr<rex::be<uint32_t>*>(base, data + kContentData_Type);
+    }
+    // a song cache package whose cache file went: the game fails to read it and
+    // never writes a cache to it again, so every start would scan the whole
+    // library. It gets the empty cache a new profile starts with, which the
+    // game reads, then writes the full one once it has scanned.
+    if (IsSongCache(file_name)) {
+        auto* runtime = rex::Runtime::instance();
+        auto* kernel = rex::system::kernel_state();
+        if (runtime && kernel) {
+            for (const auto& path : RestoreMissingCaches(runtime->user_data_root(),
+                                                          Hex(kernel->title_id()),
+                                                          Hex(content_type), file_name)) {
+                REXLOG_INFO("Song cache: {} was missing; wrote an empty one, so the game "
+                            "writes it again after this scan", rex::path_to_utf8(path));
+            }
+        }
+    }
+    __imp__CacheMgrXbox__MountAsync(ctx, base);
     if (!IsSongCache(file_name)) return;
     std::lock_guard lock(g_mutex);
     g_file_name = file_name;
-    g_content_type = *rex::memory::GuestPtr<rex::be<uint32_t>*>(base, data + kContentData_Type);
+    g_content_type = content_type;
     REXLOG_INFO("Song cache: the game mounted {}", file_name);
 }
