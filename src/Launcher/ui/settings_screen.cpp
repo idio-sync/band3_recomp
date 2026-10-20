@@ -14,6 +14,7 @@
 #include "src/Launcher/device_names.h"
 #include "src/Launcher/launcher_platform.h"
 #include "src/Launcher/launcher_style.h"
+#include "src/Lights/hotspot.h"
 #include "src/Lights/lights.h"
 #include "src/paths.h"
 #include "widgets.h"
@@ -728,6 +729,7 @@ void SettingsScreen::Leave(After after) {
 }
 
 void SettingsScreen::Finish(After after) {
+    lights::hotspot::Follow();
     if (after == After::kPlay) {
         if (host_.play) host_.play();
     } else if (host_.left) {
@@ -759,6 +761,8 @@ void SettingsScreen::TakeFolderPick() {
 // Drawing
 
 void SettingsScreen::Draw(ImGuiIO& io, std::span<const NavPad> pads, bool over_game) {
+    // the hotspot follows its rows as they change
+    lights::hotspot::Follow();
     over_game_ = over_game;
     now_ = Now();
     scale_ = Scale();
@@ -1300,6 +1304,24 @@ void SettingsScreen::DrawRowDetail(ImDrawList* dl, const Row& row, float x, floa
                          (checked_root_.empty() ? std::string("no folder set")
                                                 : rex::path_to_utf8(checked_root_)),
                      color::kBad);
+            }
+        }
+        if (cvar.starts_with("wifi_hotspot")) {
+            using State = lights::hotspot::Status::State;
+            const lights::hotspot::Status hotspot = lights::hotspot::Current();
+            switch (hotspot.state) {
+            case State::kOff: break;
+            case State::kStarting: chip("Starting the hotspot", ChipKind::kInfo); break;
+            case State::kOn:
+                chip("On: " + hotspot.name + (hotspot.address.empty() ? "" : ", this Deck at " + hotspot.address),
+                     ChipKind::kGood);
+                if (hotspot.link_local) {
+                    note("SteamOS has no DHCP server for it (dnsmasq), so a kit that joins picks its own "
+                         "address: Pico W firmware with link-local (AutoIP) addressing does.",
+                         color::kWarn);
+                }
+                break;
+            case State::kProblem: note(hotspot.problem, color::kWarn); break;
             }
         }
         if ((s.widget == Widget::kPath || s.widget == Widget::kFolderList) && row.kind == RowKind::kSetting) {

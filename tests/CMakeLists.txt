@@ -143,6 +143,7 @@ add_executable(band3_tests
     pico_fleet_test.cpp
     kit_sender_test.cpp
     lights_view_test.cpp
+    hotspot_plan_test.cpp
     heap_report_test.cpp
     ${BAND3_ROOT}/src/Audio/mic_mapping_status.cpp
     ${BAND3_ROOT}/src/Audio/usb_mic.cpp
@@ -195,6 +196,7 @@ add_executable(band3_tests
     ${BAND3_ROOT}/src/Launcher/ui/skin_images.cpp
     ${BAND3_ROOT}/src/Launcher/settings_reference.cpp
     ${BAND3_ROOT}/src/Launcher/mic_level.cpp
+    ${BAND3_ROOT}/src/Lights/hotspot_plan.cpp
     ${BAND3_ROOT}/src/Lights/kit_sender.cpp
     ${BAND3_ROOT}/src/Lights/lights_view.cpp
     ${BAND3_ROOT}/src/Lights/pico_fleet.cpp
@@ -214,6 +216,8 @@ add_executable(band3_tests
     ${BAND3_ROOT}/src/Video/sync_cache.cpp
     ${BAND3_ROOT}/src/Video/video_files.cpp
     ${BAND3_ROOT}/src/Net/album_art.cpp
+    ${BAND3_ROOT}/src/Net/broadcast_addresses.cpp
+    ${BAND3_ROOT}/src/Net/local_address.cpp
     ${BAND3_ROOT}/src/Net/ha_entities.cpp
     ${BAND3_ROOT}/src/Net/liveless_rooms_client.cpp
     ${BAND3_ROOT}/src/Net/liveless_rooms_protocol.cpp

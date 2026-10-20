@@ -2,6 +2,7 @@
 #include "renderer_default.h"
 #include "Game/heap_report.h"
 #include "Hooks/frame_pacing.h"
+#include "Lights/hotspot_plan.h"
 #include "Render/renderer_mode.h"
 #include <rex/logging.h>
 #include <algorithm>
@@ -580,6 +581,25 @@ REXCVAR_DEFINE_BOOL(pico_discovery, true, "Band3/Lights",
     "them in Settings > Lights. A Pico answers whichever program found it last, so turn this off "
     "while the RB3E Dashboard runs. They follow the game through the RB3Enhanced events. Under "
     "the test harness nothing is broadcast, so the network's Picos are left alone");
+
+REXCVAR_DEFINE_BOOL(wifi_hotspot, false, "Band3/Lights",
+    "On a Steam Deck: run a Wi-Fi network of the Deck's own while band3 runs, for the wireless "
+    "Stage Kits (Pico W) to join where there's no other Wi-Fi. NetworkManager runs it (nmcli), "
+    "on 2.4 GHz, which is all a Pico W can join. It takes the Deck's Wi-Fi off the network it "
+    "was on until band3 quits or this is turned off. Without dnsmasq, which SteamOS doesn't "
+    "have, nothing hands out addresses, so the kits that join pick link-local ones (169.254.x.x) "
+    "themselves. Not under the test harness");
+
+REXCVAR_DEFINE_STRING(wifi_hotspot_name, "band3", "Band3/Lights",
+    "The Steam Deck hotspot's network name (SSID): 1 to 32 bytes")
+    .validator([](std::string_view v) { return band3::lights::hotspot::ValidName(v); });
+
+REXCVAR_DEFINE_STRING(wifi_hotspot_password, "", "Band3/Lights",
+    "The Steam Deck hotspot's WPA2 password: 8 to 63 letters, digits and symbols. The hotspot "
+    "doesn't start without one")
+    .validator([](std::string_view v) {
+        return v.empty() || band3::lights::hotspot::ValidPassword(v);
+    });
 
 // Band3/Advanced: the Settings screen's Advanced category, by subcategory
 

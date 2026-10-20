@@ -1,4 +1,5 @@
 #include "local_address.h"
+#include "broadcast_addresses.h"
 
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
@@ -32,7 +33,7 @@ void CloseSocket(socket_t s) { close(s); }
 
 }
 
-std::string LocalAddress() {
+std::string DefaultRouteAddress() {
 #ifdef _WIN32
     // game scripts ask for this with neither the events nor the web server on
     static const bool started = [] {
@@ -58,6 +59,20 @@ std::string LocalAddress() {
         out = addr;
     }
     CloseSocket(s);
+    return out;
+}
+
+std::string LocalAddress() {
+    std::string out = DefaultRouteAddress();
+    if (!out.empty()) return out;
+    // no default route: the Steam Deck's own hotspot alone, say, which
+    // phones reach it on
+    for (const Interface& i : LocalInterfaces()) {
+        if (!i.up || i.loopback || i.address == 0) continue;
+        char addr[INET_ADDRSTRLEN] = {};
+        inet_ntop(AF_INET, &i.address, addr, sizeof(addr));
+        return addr;
+    }
     return out;
 }
 

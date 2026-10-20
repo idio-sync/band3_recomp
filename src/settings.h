@@ -134,6 +134,9 @@ REXCVAR_DECLARE(bool, rb3e_mode);
 REXCVAR_DECLARE(bool, stagekit_usb);
 REXCVAR_DECLARE(bool, pico_discovery);
 REXCVAR_DECLARE(bool, black_background_lights);
+REXCVAR_DECLARE(bool, wifi_hotspot);
+REXCVAR_DECLARE(std::string, wifi_hotspot_name);
+REXCVAR_DECLARE(std::string, wifi_hotspot_password);
 
 // Band3/Advanced/Memory
 REXCVAR_DECLARE(int32_t, main_heap_size);

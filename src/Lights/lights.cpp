@@ -1,4 +1,5 @@
 #include "lights.h"
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -12,9 +13,11 @@
 #include <SDL3/SDL_hidapi.h>
 #include <rex/cvar.h>
 #include <rex/logging.h>
+#include "hotspot.h"
 #include "kit_sender.h"
 #include "pico_fleet.h"
 #include "src/Launcher/launcher_platform.h"
+#include "src/Net/broadcast_addresses.h"
 #include "src/Net/native_socket.h"
 #include "src/settings.h"
 
@@ -358,6 +361,18 @@ uint32_t SubnetBroadcast() {
     return address;
 }
 
+// where a broadcast goes: 255.255.255.255 and the default route's subnet,
+// and the networks the default route doesn't reach (the Steam Deck's own
+// hotspot, src/Lights/hotspot.h)
+std::vector<uint32_t> BroadcastsNow() {
+    std::vector<uint32_t> out{Broadcast()};
+    if (const uint32_t subnet = SubnetBroadcast()) out.push_back(subnet);
+    for (const uint32_t other : net::OtherNetworkBroadcasts()) {
+        if (std::find(out.begin(), out.end(), other) == out.end()) out.push_back(other);
+    }
+    return out;
+}
+
 socket_t OpenUdp() {
     socket_t s = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
     if (s == kNoSocket) return s;
@@ -464,9 +479,8 @@ private:
 
     void Discover() {
         const auto* packet = reinterpret_cast<const uint8_t*>(kDiscoveryPacket.data());
-        net::SendTo(telemetry_, packet, kDiscoveryPacket.size(), Broadcast(), htons(kTelemetryPort));
-        if (const uint32_t subnet = SubnetBroadcast()) {
-            net::SendTo(telemetry_, packet, kDiscoveryPacket.size(), subnet, htons(kTelemetryPort));
+        for (const uint32_t to : BroadcastsNow()) {
+            net::SendTo(telemetry_, packet, kDiscoveryPacket.size(), to, htons(kTelemetryPort));
         }
     }
 
@@ -512,8 +526,7 @@ private:
             return;
         }
         if (UnderHarness()) return;
-        to(Broadcast());
-        if (const uint32_t subnet = SubnetBroadcast()) to(subnet);
+        for (const uint32_t address : BroadcastsNow()) to(address);
     }
 
     socket_t command_ = kNoSocket;
@@ -579,6 +592,7 @@ void Start() {
     }
     g_usb.thread = std::thread([] { UsbKits().Run(); });
     g_picos.thread = std::thread([] { PicoLink().Run(); });
+    hotspot::Start();
 }
 
 void Stop() {
@@ -599,6 +613,8 @@ void Stop() {
     g_picos.cv.notify_one();
     if (g_usb.thread.joinable()) g_usb.thread.join();
     if (g_picos.thread.joinable()) g_picos.thread.join();
+    // after the Picos are sent their all off, which they take over it
+    hotspot::Stop();
     g_started = false;
 }
 

@@ -168,6 +168,7 @@ constexpr Condition kWithListenBrainz{"listenbrainz_enabled", "true"};
 constexpr Condition kWithEvents{"events_enabled", "true"};
 constexpr Condition kWithGoCentral{"gocentral", "true"};
 constexpr Condition kWithLiveless{"liveless", "true"};
+constexpr Condition kWithHotspot{"wifi_hotspot", "true"};
 constexpr Condition kWithRooms{"liveless_rooms", "true"};
 // a broker's host turns Home Assistant's MQTT on
 constexpr Condition kWithHaBroker{.cvar = "ha_mqtt_host", .not_empty = true};
@@ -581,6 +582,20 @@ constexpr Setting kSettings[] = {
      .label = "Black background", .widget = kCheckbox,
      .about = "With the Black Background modifier, keeps a venue drawn black, so its lights "
               "still reach the Stage Kits."},
+    {.cvar = "wifi_hotspot", .category = kLights, .section = "Wi-Fi hotspot",
+     .label = "Wi-Fi hotspot", .widget = kCheckbox, .deck_only = true, .linux_only = true,
+     .about = "Makes a Wi-Fi network of this Deck's own while band3 runs, for the wireless "
+              "Stage Kits to join where there's no other Wi-Fi. The Deck leaves the network "
+              "it's on until band3 quits or this is off."},
+    {.cvar = "wifi_hotspot_name", .category = kLights, .section = "Wi-Fi hotspot",
+     .label = "Network name", .widget = kText, .shown_when = kWithHotspot, .deck_only = true,
+     .linux_only = true,
+     .about = "The hotspot's name, which each Pico W kit is set to join."},
+    {.cvar = "wifi_hotspot_password", .category = kLights, .section = "Wi-Fi hotspot",
+     .label = "Password", .widget = kText, .shown_when = kWithHotspot, .deck_only = true,
+     .linux_only = true,
+     .about = "The hotspot's password, 8 to 63 characters, which each Pico W kit is set to "
+              "join with. Shown, so you can copy it to the kits."},
 
     // Online
     {.cvar = "liveless", .category = kOnline, .section = "Online play", .label = "Play online",
@@ -1015,6 +1030,7 @@ std::string_view SettingsModel::Description(std::string_view cvar) const {
 bool SettingsModel::Available(const Setting& setting) const {
     const CvarFacts* facts = Facts(setting.cvar);
     if (!facts || !facts->exists) return false;
+    if (setting.linux_only && env_.windows) return false;
     return !setting.windows_only || env_.windows;
 }
 

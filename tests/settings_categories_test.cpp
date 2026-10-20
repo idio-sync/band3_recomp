@@ -86,7 +86,7 @@ TEST_CASE("each category's sections are the redesign's, in order") {
     CHECK(Sections(Category::kControllers) == Names{"Instruments", "Menus", "Sticks", "Delay", "Players"});
     CHECK(Sections(Category::kMidi) == Names{"Drums", "Keyboard"});
     CHECK(Sections(Category::kVideos) == Names{"Playback", "Finding videos"});
-    CHECK(Sections(Category::kLights) == Names{"Stage Kits"});
+    CHECK(Sections(Category::kLights) == Names{"Stage Kits", "Wi-Fi hotspot"});
     CHECK(Sections(Category::kOnline) == Names{"Online play", "GoCentral"});
     CHECK(Sections(Category::kOtherApps) ==
           Names{"Web song browser", "Scrobbling", "RB3Enhanced", "Home Assistant", "Discord"});

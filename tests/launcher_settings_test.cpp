@@ -404,6 +404,31 @@ TEST_CASE("the Deck toggle does nothing off a Deck") {
     CHECK_FALSE(m2.Visible(*m2.Find("steam_deck_defaults")));
 }
 
+TEST_CASE("the hotspot's rows show only on a Steam Deck running Linux") {
+    Fixture f;
+    f.env.cvars["wifi_hotspot"] = Facts(ValueType::kBool, "false");
+    f.env.cvars["wifi_hotspot_name"] = Facts(ValueType::kString, "band3");
+    f.store.values["wifi_hotspot"] = "true";
+    f.store.values["wifi_hotspot_name"] = "band3";
+    const Setting table[] = {
+        {.cvar = "wifi_hotspot", .category = Category::kLights, .section = "Wi-Fi hotspot",
+         .label = "Wi-Fi hotspot", .widget = Widget::kCheckbox, .deck_only = true, .linux_only = true},
+        {.cvar = "wifi_hotspot_name", .category = Category::kLights, .section = "Wi-Fi hotspot",
+         .label = "Network name", .widget = Widget::kText, .shown_when = {"wifi_hotspot", "true"},
+         .deck_only = true, .linux_only = true},
+    };
+    for (const bool deck : {false, true}) {
+        for (const bool windows : {false, true}) {
+            INFO("deck ", deck, ", windows ", windows);
+            f.env.steam_deck = deck;
+            f.env.windows = windows;
+            SettingsModel m(table, f.env, f.store);
+            CHECK(m.Visible(*m.Find("wifi_hotspot")) == (deck && !windows));
+            CHECK(m.Visible(*m.Find("wifi_hotspot_name")) == (deck && !windows));
+        }
+    }
+}
+
 TEST_CASE("unsaved changes are what differs from the last save") {
     Fixture f;
     SettingsModel m(kTable, f.env, f.store);

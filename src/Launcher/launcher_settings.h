@@ -146,6 +146,9 @@ struct Setting {
     bool windows_only = false;
     // shown only on a Steam Deck (steam_deck_defaults)
     bool deck_only = false;
+    // not in the Windows build, which runs on a Deck through Proton: the
+    // Deck's hotspot, which Linux's NetworkManager runs
+    bool linux_only = false;
     // a folder the game takes as it starts: changed on the launcher only, so
     // read-only in game (SettingsModel::ReadOnly)
     bool launcher_only = false;

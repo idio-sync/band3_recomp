@@ -14,6 +14,7 @@
 // RB3Enhanced events, src/Net/events.h). Starts with the launcher, so the
 // Lights category works before the game, and follows stagekit_usb and pico_discovery as they
 // change. Each side runs on a thread of its own; these calls only queue work.
+// Start and Stop also start and stop the Steam Deck's hotspot (hotspot.h).
 namespace band3::lights {
 
 void Start();
