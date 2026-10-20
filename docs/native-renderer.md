@@ -161,7 +161,11 @@ and vertical blanks, and draws nothing.
   created character's outfit and skin came out black.
 - Art saved in the Art Library is drawn again on the CPU from the art maker's recorded passes,
   as nothing puts the art maker's picture in guest memory for the game to copy (it saved noise).
-  The log says `Target readback:` with the time it took.
+  So is a character's portrait, taken when it's made or leaves the closet and shown in the
+  overshell's Characters list. The log says `Target readback:` with the time it took: about
+  5 ms for art, 25 ms for a session musician's portrait, but 0.6 s for a made character's,
+  whose outfit passes are drawn too, so the game stops that long on Create.
+  `tests/game/art_library.b3t` and `tests/game/character_portrait.b3t` go through them.
 - A GPU hang ends band3, with the crash trace: there's no device recovery to fall back on.
 - While the window is minimized nothing is drawn; restored, the next whole frame shows a frame
   or two later. Under `both` it draws on while minimized.
