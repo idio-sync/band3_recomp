@@ -71,34 +71,7 @@ target_include_directories(band3_compile_check PRIVATE
     "${BAND3_ROOT}/src"
 )
 target_link_libraries(band3_compile_check PRIVATE rex::runtime)
-# as the band3 target has it, for the SDK's Vulkan headers
-if(NOT WIN32 AND TARGET rex::renderdoc)
-    target_link_libraries(band3_compile_check PRIVATE rex::renderdoc)
-endif()
-# FFmpeg's headers, as the band3 target has them (cmake/ffmpeg.cmake), for
-# src/Video/video_decoder_ffmpeg.cpp; without them it compiles to nothing
-include("${BAND3_ROOT}/cmake/ffmpeg.cmake")
-band3_setup_ffmpeg(band3_compile_check)
-# as the band3 target defines it, for src/sdk_export.cpp
-target_compile_definitions(band3_compile_check PRIVATE
-    BAND3_REXRUNTIME_DLL="$<TARGET_FILE_NAME:rex::runtime>")
-
-# the same MIDI backend as the real build
-include(${BAND3_ROOT}/cmake/rtmidi.cmake)
-band3_setup_rtmidi(band3_compile_check ${BAND3_ROOT}/src/ThirdParty/rtmidi/RtMidi.cpp)
-
-# the same GameInput header, for src/Input/gameinput_instruments.cpp
-include(${BAND3_ROOT}/cmake/gameinput.cmake)
-band3_setup_gameinput(band3_compile_check)
-
-# the same HTTPS client as the real build
-include(${BAND3_ROOT}/cmake/web_client.cmake)
-band3_setup_web_client(band3_compile_check)
-
-# the same miniupnpc definitions and headers, for src/Net/port_mapping.cpp
-include(${BAND3_ROOT}/cmake/miniupnpc.cmake)
-band3_setup_miniupnpc(band3_compile_check ${BAND3_ROOT}/src/ThirdParty/miniupnpc)
-
-# the same build tag header, for src/build_tag.cpp
-include(${BAND3_ROOT}/cmake/build_tag.cmake)
-band3_setup_build_tag(band3_compile_check ${BAND3_ROOT})
+# everything else the band3 target compiles with: definitions, third-party
+# and generated headers (cmake/band3_compile_setup.cmake)
+include("${BAND3_ROOT}/cmake/band3_compile_setup.cmake")
+band3_setup_compile(band3_compile_check ${BAND3_ROOT})

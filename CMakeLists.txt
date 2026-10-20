@@ -46,9 +46,6 @@ if(UNIX AND NOT APPLE AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
     endif()
 endif()
 
-# the SDK's runtime library by file name (rexruntime[d|rd].dll,
-# librexruntime[d|rd].so), for src/sdk_export.cpp
-target_compile_definitions(band3 PRIVATE BAND3_REXRUNTIME_DLL="$<TARGET_FILE_NAME:rex::runtime>")
 target_link_libraries(band3 PRIVATE ${CMAKE_DL_LIBS})
 
 # band3's Last.fm API account (last.fm/api/account/create), for scrobbling
@@ -71,13 +68,6 @@ if(UNIX AND NOT APPLE)
     set_property(TARGET band3 APPEND PROPERTY LINK_DEPENDS ${BAND3_EXPORTS})
 endif()
 
-# renderdoc_app.h, which the SDK's Vulkan headers include
-# (rex/ui/renderdoc_api.h) but rex::runtime doesn't bring along: for the
-# Vulkan presenter in src/Render/sync_gpu/sync_graphics_system.cpp
-if(NOT WIN32 AND TARGET rex::renderdoc)
-    target_link_libraries(band3 PRIVATE rex::renderdoc)
-endif()
-
 # UDP sockets for the RB3E network events (src/Net/events.cpp)
 if(WIN32)
     target_link_libraries(band3 PRIVATE ws2_32)
@@ -97,33 +87,7 @@ if(WIN32)
     target_link_libraries(band3 PRIVATE mfplat mfreadwrite mfuuid)
 endif()
 
-# FFmpeg, which decodes music videos (src/Video/video_decoder_ffmpeg.cpp)
-include(cmake/ffmpeg.cmake)
-band3_setup_ffmpeg(band3)
-
-# MIDI input for MIDI drum kits (src/Input/midi_drums_driver.cpp)
-include(cmake/rtmidi.cmake)
-band3_setup_rtmidi(band3 ${CMAKE_CURRENT_SOURCE_DIR}/src/ThirdParty/rtmidi/RtMidi.cpp)
-
-# Xbox One instruments through GameInput (src/Input/gameinput_instruments.cpp)
-include(cmake/gameinput.cmake)
-band3_setup_gameinput(band3)
-
-# HTTPS requests for RhythmVerse's songs (src/Net/web_client.cpp)
-include(cmake/web_client.cmake)
-band3_setup_web_client(band3)
-
-# UPnP port mapping for Liveless (src/Net/port_mapping.cpp)
-include(cmake/miniupnpc.cmake)
-band3_setup_miniupnpc(band3 ${CMAKE_CURRENT_SOURCE_DIR}/src/ThirdParty/miniupnpc)
-
-# the launcher's type, Montserrat (src/Launcher/ui/theme.cpp), compiled in
-include(cmake/embed.cmake)
-band3_embed_file(band3 ${CMAKE_CURRENT_SOURCE_DIR}/src/ThirdParty/montserrat/Montserrat-SemiBold.ttf
-                 kMontserratSemiBold)
-band3_embed_file(band3 ${CMAKE_CURRENT_SOURCE_DIR}/src/ThirdParty/montserrat/Montserrat-ExtraBold.ttf
-                 kMontserratExtraBold)
-
-# the build tag src/build_tag.cpp gives the log and the Liveless Rooms server
-include(cmake/build_tag.cmake)
-band3_setup_build_tag(band3 ${CMAKE_CURRENT_SOURCE_DIR})
+# definitions, third-party and generated headers src/ compiles against,
+# shared with the CI compile check (tools/compile_check)
+include(cmake/band3_compile_setup.cmake)
+band3_setup_compile(band3 ${CMAKE_CURRENT_SOURCE_DIR})

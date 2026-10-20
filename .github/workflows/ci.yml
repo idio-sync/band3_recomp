@@ -31,13 +31,19 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      # FFmpeg, for video_decoder_test.cpp's clips (Windows downloads its own)
+      # clang, and FFmpeg for video_decoder_test.cpp's clips (Windows downloads its own)
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y pkg-config libavformat-dev libavcodec-dev libavutil-dev libswscale-dev
-      - name: Configure
+          sudo apt-get install -y clang libstdc++-14-dev pkg-config libavformat-dev libavcodec-dev libavutil-dev libswscale-dev
+      # clang, as every band3 build uses (CMakePresets.json), rather than the
+      # runner's default GCC, which nothing ships with or checks locally
+      - name: Configure (Linux)
+        if: runner.os == 'Linux'
+        run: cmake -S tests -B out/tests -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
+      - name: Configure (Windows)
+        if: runner.os == 'Windows'
         run: cmake -S tests -B out/tests -DCMAKE_BUILD_TYPE=Release
       - name: Build
         run: cmake --build out/tests --config Release

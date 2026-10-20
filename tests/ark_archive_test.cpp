@@ -184,7 +184,7 @@ TEST_CASE("disc songs in assets/gen decrypt to a whole Ogg stream" * doctest::sk
         const auto h = band3::video::ParseMoggHeader(mogg);
         REQUIRE(h);
         // its pages all read, to the end
-        band3::video::OggPackets packets(std::span(mogg).subspan(h->ogg_offset));
+        band3::video::OggPackets packets{std::span(mogg).subspan(h->ogg_offset)};
         Bytes packet;
         size_t count = 0, bytes = 0;
         while (packets.Next(packet)) {
