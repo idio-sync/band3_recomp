@@ -88,6 +88,7 @@ add_executable(band3_tests
     lyrics_test.cpp
     live_events_test.cpp
     paths_test.cpp
+    song_cache_files_test.cpp
     loose_name_test.cpp
     package_scan_test.cpp
     stfs_reader_test.cpp
@@ -157,6 +158,7 @@ add_executable(band3_tests
     ${BAND3_ROOT}/src/Content/song_dta.cpp
     ${BAND3_ROOT}/src/Content/song_inventory.cpp
     ${BAND3_ROOT}/src/Game/heap_report.cpp
+    ${BAND3_ROOT}/src/Game/song_cache_files.cpp
     ${BAND3_ROOT}/src/Game/song_id.cpp
     ${BAND3_ROOT}/src/Input/gip_instruments.cpp
     ${BAND3_ROOT}/src/Input/hid_capture.cpp

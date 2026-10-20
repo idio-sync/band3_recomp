@@ -5,7 +5,9 @@
 // rbdxcache) the game keeps its scanned song list in, which RB3Enhanced's
 // rb3e_delete_songcache deletes. The game has it open while it runs, so band3
 // deletes it the next time it starts, before the game mounts anything; Deluxe
-// relaunches straight after asking, as it does on RB3E.
+// relaunches straight after asking, as it does on RB3E. A song cache package
+// missing its cache file gets an empty one as the game mounts it
+// (song_cache_files.h).
 
 namespace band3::song_cache {
 
