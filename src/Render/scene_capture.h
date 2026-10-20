@@ -925,8 +925,8 @@ std::shared_ptr<const FrameCapture> LatestCapture(
 // the latest FrameCapture::frame, 0 before the first, without decoding
 uint64_t LatestCaptureFrame();
 
-// For reading render target `tex` back without the emulated GPU
-// (src/Hooks/bitmap_readback.cpp): fills `out` with its last recorded pass
+// For reading render target `tex` back on the CPU where the emulated GPU's
+// copy is missing (src/Hooks/bitmap_readback.cpp): fills `out` with its last recorded pass
 // and, before it, the passes it samples, transitively, as CarryPasses carries
 // them (out.rt_missing counts samples no recorded pass makes), and `version`
 // with the version that pass made. False if no pass of the target was

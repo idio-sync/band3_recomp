@@ -1,6 +1,8 @@
 # art_library.b3t with a red sticker, to check the colour order of a target
 # read back under --renderer=native (src/Render/bitmap_readback.h writes each
-# texel as bytes A R G B). art_library.b3t's sticker is grey, so red and blue
+# texel as bytes A R G B), and under --renderer=emulated without a
+# readback_resolve setting (band3 has the emulated GPU read the art maker
+# back itself). art_library.b3t's sticker is grey, so red and blue
 # swapped wouldn't show; this one is Paul Slifer's Red Hot & Blue Tattoo's
 # first sticker (the wizard and the dragon), its colour changed to the
 # palette's red (Change Color, the fifth swatch). Swapped, the saved piece

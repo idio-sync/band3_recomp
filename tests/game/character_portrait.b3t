@@ -1,0 +1,101 @@
+# Makes a character from where render_screens_boot.b3t leaves Rock Band 3
+# Deluxe (the welcome hint, on a fresh profile) and shows its portrait: the
+# picture in the overshell's Characters list, beside the character's name.
+# Creating it (Create, Yes) has RB3 draw the character into a 256x512 render
+# target (portrait.tex) and copy that to the character's own portrait texture
+# on the CPU (TourChar::CachePortraitTex: DxTex::LockBitmap on the target,
+# SetBitmap on the portrait). LockBitmap untiles guest memory's copy of the
+# target, which only a resolve fills: under --renderer=native nothing does,
+# and src/Hooks/bitmap_readback.cpp draws the target again on the CPU from
+# its recorded passes into the bitmap (the log's "Target readback:" line,
+# with the time it took); under --renderer=emulated it turns the SDK's
+# readback on while the portrait is drawn, so the game copies the emulated
+# GPU's own picture. Leaving the closet (Customize Character) takes a
+# portrait the same way. Session musicians (prefabs) show a placeholder
+# silhouette in the list instead.
+#   python tools/band3ctl.py launch --fresh -- --renderer=native --test_random_seed=21 --async_shader_compilation=false
+#   python tools/band3ctl.py run tests/game/render_screens_boot.b3t
+#   python tools/band3ctl.py window offscreen
+#   python tools/band3ctl.py run tests/game/character_portrait.b3t
+# The reference is --renderer=emulated --readback_resolve=full, where the
+# emulated GPU resolves the target into guest memory and the game's own
+# untile reads it. The character is random (its looks aren't seeded), so
+# compare a run's portrait-chars against portrait-creator, or the same
+# character's portrait across runs through the bitmap itself.
+# `window offscreen` first: naming the character opens the SDK's name dialog
+# (an overlay, which only takes keys while the window paints), and
+# `type {enter}` accepts the name it offers.
+# Screenshots are under screenshots/ next to the exe. portrait-create's
+# present_stats reply has the game's frame times while the portrait is
+# taken. It leaves the game on the main menu.
+
+# the welcome hint: Continue, to the main menu
+wait screen=hint_rb3_welcome_screen timeout=30s
+sleep 1s
+press down
+sleep 333ms
+press green until screen=main_hub_screen timeout=30s
+sleep 2s
+
+# Customize, Create Character: the camera comes in through the barbershop's
+# doors first, for about 10 s
+press down
+sleep 333ms
+press down
+sleep 333ms
+press down
+sleep 500ms
+press green
+sleep 1s
+press down
+sleep 333ms
+press down
+sleep 500ms
+press green until screen=charactercreator_screen timeout=60s
+wait frames=600
+# Name: the SDK's dialog, with a name filled in; Enter takes it
+press green
+sleep 2s
+type {enter}
+sleep 1500ms
+screenshot portrait-creator
+# Create, the last of six, then Yes on its question
+press down
+sleep 333ms
+press down
+sleep 333ms
+press down
+sleep 333ms
+press down
+sleep 333ms
+press down
+sleep 500ms
+press green until screen=charactercreator_create_screen timeout=20s
+sleep 1500ms
+press up
+sleep 400ms
+present_stats reset
+press green
+# the first goal (making a character) is done: its hint, then the main menu
+wait screen=hint_goalcomplete_screen timeout=60s
+sleep 1s
+present_stats
+press green until screen=main_hub_screen timeout=60s
+sleep 2s
+
+# the overshell's menu (Start), Characters: the new character first, its
+# portrait above the list
+press start
+sleep 1500ms
+press down
+sleep 400ms
+press down
+sleep 400ms
+press green
+sleep 2500ms
+screenshot portrait-chars
+# back out of the list and the menu
+press red
+sleep 1s
+press red
+sleep 1s
