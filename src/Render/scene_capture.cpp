@@ -29,6 +29,7 @@
 #include "generated/band3_init.h"
 #include "src/Hooks/aspect.h"
 #include "src/Hooks/frame_pacing.h"
+#include "src/Render/bitmap_readback.h"
 #include "src/Render/deferred_decode.h"
 #include "src/Render/frame_compose.h"
 #include "src/Render/gpu_skip.h"
@@ -3164,10 +3165,13 @@ extern "C" REX_FUNC(RndShader__Cache) {
     __imp__RndShader__Cache(ctx, base);
 }
 
-// DxTex::MakeDrawTarget: binds texture r3 as the render target
+// DxTex::MakeDrawTarget: binds texture r3 as the render target. With an
+// emulated GPU, a target RB3 copies to the CPU has its resolves read back
+// (bitmap_readback.h), capture or not.
 extern "C" REX_FUNC(DxTex__MakeDrawTarget) {
     const uint32_t tex = ctx.r3.u32;
     __imp__DxTex__MakeDrawTarget(ctx, base);
+    NoteTargetPass(base, tex);
     if (!Active()) return;
     std::lock_guard lock(g_state_mutex);
     HookTimer timer(CaptureProfile::kHookPass);
@@ -3386,6 +3390,7 @@ extern "C" REX_FUNC(DxRnd__Present) {
     __imp__DxRnd__Present(ctx, base);
     band3::stall_watch::PresentDone();
     TrackSettings();
+    ReadbackWindowFrame();
     uint64_t game_ns = 0;
     {
         const auto now = std::chrono::steady_clock::now();

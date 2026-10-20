@@ -8,7 +8,9 @@
 # target, which only a resolve fills: under --renderer=native nothing does,
 # and src/Hooks/bitmap_readback.cpp draws the target again on the CPU from
 # its recorded passes into the bitmap (the log's "Target readback:" line,
-# with the time it took). Leaving the closet (Customize Character) takes a
+# with the time it took); under --renderer=emulated it turns the SDK's
+# readback on while the portrait is drawn, so the game copies the emulated
+# GPU's own picture. Leaving the closet (Customize Character) takes a
 # portrait the same way. Session musicians (prefabs) show a placeholder
 # silhouette in the list instead.
 #   python tools/band3ctl.py launch --fresh -- --renderer=native --test_random_seed=21 --async_shader_compilation=false

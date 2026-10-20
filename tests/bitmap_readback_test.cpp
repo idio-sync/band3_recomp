@@ -3,7 +3,10 @@
 // DxTex::LockBitmap made of it, as big-endian ARGB words (A R G B bytes, as
 // a locked D3DFMT_A8R8G8B8 surface has them), its rows the bitmap's row
 // bytes apart, alpha kept; and that a bitmap of another shape (bits per
-// pixel, order, size, short rows) is left as it was.
+// pixel, order, size, short rows) is left as it was. Then, with an emulated
+// GPU: which targets RB3 copies, when the SDK's readback is on as it reads
+// its settings, the window that turns it on around a copied target's passes,
+// and which picture the bitmap gets under each renderer.
 
 #include <doctest/doctest.h>
 #include <cstdint>
@@ -61,4 +64,63 @@ TEST_CASE("a bitmap of another shape is left as it was") {
     CHECK_FALSE(WriteTargetBitmap({}, 0, 0, Shape(0, 0, 0), out.data()));
     CHECK_FALSE(WriteTargetBitmap(rgba, 2, 2, Shape(2, 2, 8), nullptr));
     CHECK(out == before);
+}
+
+TEST_CASE("the art maker's target and the portrait are the targets RB3 copies") {
+    CHECK(IsCopiedTarget("patch_preview.tex"));
+    CHECK(IsCopiedTarget("portrait.tex"));
+    CHECK_FALSE(IsCopiedTarget(""));
+    CHECK_FALSE(IsCopiedTarget("portrait"));
+    CHECK_FALSE(IsCopiedTarget("bloom.tex"));
+}
+
+TEST_CASE("the SDK reads back resolves for a readback_resolve mode, else for the old switch") {
+    CHECK(SdkReadsBackResolves("fast", false, false));
+    CHECK(SdkReadsBackResolves("some", false, false));
+    CHECK(SdkReadsBackResolves("full", false, false));
+    CHECK_FALSE(SdkReadsBackResolves("none", true, false));
+    // d3d12_readback_resolve counts while readback_resolve is at its default
+    CHECK(SdkReadsBackResolves("none", true, true));
+    // and not once it's been set, even to a value the SDK doesn't know
+    CHECK_FALSE(SdkReadsBackResolves("bogus", false, true));
+    CHECK_FALSE(SdkReadsBackResolves("bogus", false, false));
+}
+
+TEST_CASE("the readback window opens at a copied target's pass and closes frames after the last") {
+    ReadbackWindow w;
+    CHECK_FALSE(w.open());
+    CHECK(w.Frame(1) == ReadbackWindow::Change::kNone);
+    CHECK(w.Drawn(5) == ReadbackWindow::Change::kOpen);
+    CHECK(w.open());
+    // drawn again: still open, and the count starts over
+    CHECK(w.Drawn(6) == ReadbackWindow::Change::kNone);
+    for (uint64_t f = 6; f < 6 + ReadbackWindow::kFrames; f++)
+        CHECK(w.Frame(f) == ReadbackWindow::Change::kNone);
+    CHECK(w.open());
+    CHECK(w.Frame(6 + ReadbackWindow::kFrames) == ReadbackWindow::Change::kClose);
+    CHECK_FALSE(w.open());
+    CHECK(w.Frame(100) == ReadbackWindow::Change::kNone);
+    // and opens again at the next one
+    CHECK(w.Drawn(200) == ReadbackWindow::Change::kOpen);
+}
+
+TEST_CASE("a target drawn every frame keeps the window open") {
+    ReadbackWindow w;
+    CHECK(w.Drawn(0) == ReadbackWindow::Change::kOpen);
+    for (uint64_t f = 1; f < 1000; f++) {
+        CHECK(w.Drawn(f) == ReadbackWindow::Change::kNone);
+        CHECK(w.Frame(f) == ReadbackWindow::Change::kNone);
+    }
+    CHECK(w.open());
+}
+
+TEST_CASE("the bitmap gets the CPU's drawing only where the emulated GPU's may be missing") {
+    // renderer native: nothing resolves into guest memory
+    CHECK(DrawsCopyOnCpu(true, true));
+    // both, the native picture showing: the emulated GPU skips the draws of
+    // passes drawn every frame
+    CHECK(DrawsCopyOnCpu(false, true));
+    // emulated, or both showing the emulated GPU's picture: guest memory's,
+    // which the readback window fills
+    CHECK_FALSE(DrawsCopyOnCpu(false, false));
 }

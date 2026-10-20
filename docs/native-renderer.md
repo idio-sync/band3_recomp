@@ -38,6 +38,23 @@ The launcher and the in-game settings show only the rows for the chosen renderer
 GPU's own settings belong to its plugin, which a `native` run doesn't load, so after switching
 to `emulated` or `both` they appear once band3 restarts.
 
+### Art and portraits
+
+RB3 copies two pictures it draws into memory the CPU reads: a piece of art saved in the Art
+Library, and a character's portrait (shown in the overshell's Characters list), taken when the
+character is made or leaves the closet. The emulated GPU's pictures reach that memory only if it
+reads them back (the SDK's `readback_resolve`), which is off by default as it costs frame time;
+without it both came out as noise. Under every renderer they're right now:
+
+| `renderer` | How |
+|---|---|
+| `native`, or `both` while the native picture shows | drawn again on the CPU ([below](#renderer-native-no-emulated-gpu)) |
+| `emulated`, or `both` showing the emulated GPU's picture | while the art maker or a portrait is drawn, and 10 frames after, band3 turns the SDK's `d3d12_readback_resolve` on (it reads back as `readback_resolve` `fast` does) and the game copies the GPU's own picture. In the art maker that cost the GPU's command thread about 0.7 ms a frame. Not when `readback_resolve` already reads back, or when `d3d12_readback_resolve` is set in `band3.toml` or on the command line (`false` keeps it off, and the noise) |
+
+The log says `Target readback:` each time. Outfits compressed with `compress_character_textures`
+still need `readback_resolve`. `tests/game/art_library.b3t`, `art_library_color.b3t` and
+`character_portrait.b3t` go through them.
+
 ## Presenting
 
 - **Zero-copy.** On Windows frames reach the window without leaving the GPU. Elsewhere, or with
@@ -159,13 +176,12 @@ and vertical blanks, and draws nothing.
 - `emulated_gpu_while_native` doesn't apply, and F8 only logs that it needs `both`.
 - `compress_character_textures` is ignored: with nothing drawing the outfits in guest memory, a
   created character's outfit and skin came out black.
-- Art saved in the Art Library is drawn again on the CPU from the art maker's recorded passes,
-  as nothing puts the art maker's picture in guest memory for the game to copy (it saved noise).
-  So is a character's portrait, taken when it's made or leaves the closet and shown in the
-  overshell's Characters list. The log says `Target readback:` with the time it took: about
-  5 ms for art, 25 ms for a session musician's portrait, but 0.6 s for a made character's,
-  whose outfit passes are drawn too, so the game stops that long on Create.
-  `tests/game/art_library.b3t` and `tests/game/character_portrait.b3t` go through them.
+- [Art and portraits](#art-and-portraits) RB3 copies to the CPU are drawn again on the CPU
+  from their recorded passes, as nothing puts them in guest memory for the game to copy (it
+  saved noise). The log says `Target readback:` with the time it took: about 5 ms for art,
+  25 ms for a session musician's portrait, but 0.6 s for a made character's, whose outfit
+  passes are drawn too, so the game stops that long on Create. Inside a made character's skin
+  and shirt the portrait's alpha is 190 to 250 where the emulated GPU's is 255.
 - A GPU hang ends band3, with the crash trace: there's no device recovery to fall back on.
 - While the window is minimized nothing is drawn; restored, the next whole frame shows a frame
   or two later. Under `both` it draws on while minimized.

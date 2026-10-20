@@ -8,15 +8,17 @@
 # and the clipboard's big preview after it show the pixels that copy got.
 # LockBitmap untiles guest memory's copy of the target, and only a resolve
 # puts the target's pixels there: under --renderer=native nothing does (the
-# sync-only GPU draws nothing), nor under --renderer=emulated without
-# --readback_resolve=fast or full. Until 2026-10-20 the piece was colourful
-# noise (whatever the memory held, a different pattern each run), while the
-# art maker's own clipboard and the save prompt's New thumbnail, drawn from
-# the target itself, were right: art-maker-* right, art-library-new* noise
-# was the bug. Under native, src/Hooks/bitmap_readback.cpp now draws the
-# target again on the CPU from its recorded passes into the bitmap (the
-# log's "Target readback:" line); under emulated without readback_resolve
-# it's still noise.
+# sync-only GPU draws nothing), nor under --renderer=emulated unless the
+# emulated GPU reads its resolves back (readback_resolve). Until 2026-10-20
+# the piece was colourful noise (whatever the memory held, a different
+# pattern each run), while the art maker's own clipboard and the save
+# prompt's New thumbnail, drawn from the target itself, were right:
+# art-maker-* right, art-library-new* noise was the bug. Now
+# src/Hooks/bitmap_readback.cpp draws the target again on the CPU from its
+# recorded passes into the bitmap under native (and both, the native
+# picture showing), and under emulated turns the SDK's readback on while the
+# art maker is drawn (d3d12_readback_resolve), so the game copies the GPU's
+# own picture; the log's "Target readback:" lines say which.
 #   python tools/band3ctl.py launch --fresh -- --renderer=native --test_random_seed=21 --async_shader_compilation=false
 #   python tools/band3ctl.py run tests/game/render_screens_boot.b3t
 #   python tools/band3ctl.py run tests/game/art_library.b3t
