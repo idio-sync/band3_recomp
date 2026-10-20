@@ -190,11 +190,16 @@ Gamepad360 EncodeProGuitar(const ProGuitarInputs& in);
 // UsbMidiGuitar::Poll as ProGuitarData (rb3-xenon, src/system/os). They are an
 // Xbox 360 instrument's report from the left trigger on, in its little-endian
 // wire order, which the XInput state holds the first ten bytes of; the rest
-// (accelerometer, hand placement, connected accessories) stay zero. RB3 gets
-// them from XamInputRawState, which ReXGlue doesn't implement, so band3 writes
-// them itself (Hooks/pro_instruments.cpp).
+// (the keyboard's touchpad, accelerometer, hand placement, connected
+// accessories) stay zero, but for what an instrument band3 reads itself sends
+// (ProExtra). RB3 gets them from XamInputRawState, which ReXGlue doesn't
+// implement, so band3 writes them itself (Hooks/pro_instruments.cpp).
 inline constexpr size_t kProDataSize = 16;
 using ProData = std::array<uint8_t, kProDataSize>;
 ProData EncodeProData(const Gamepad360& g);
+
+// ProData's bytes past the XInput state's ten, from kProExtraOffset on
+inline constexpr size_t kProExtraOffset = 10;
+using ProExtra = std::array<uint8_t, kProDataSize - kProExtraOffset>;
 
 }

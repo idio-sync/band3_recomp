@@ -178,6 +178,7 @@ struct Device {
     // the reader thread writes these, guest threads and the Lab read them
     std::mutex mutex;
     Gamepad360 state{};
+    ProExtra pro_extra{};
     uint32_t packet_number = 0;
     uint64_t report_count = 0;
     std::vector<uint8_t> last_report;
@@ -294,6 +295,14 @@ public:
             out.push_back(std::move(status));
         }
         return out;
+    }
+
+    std::optional<ProExtra> ProExtraOf(uint64_t id) {
+        std::lock_guard<std::mutex> lock(devices_mutex_);
+        Device* device = Find(static_cast<DeviceId>(id));
+        if (!device) return std::nullopt;
+        std::lock_guard<std::mutex> state_lock(device->mutex);
+        return device->pro_extra;
     }
 
     std::vector<WrongDriverInstrument> WrongDriver() {
@@ -493,9 +502,12 @@ private:
             const auto state =
                 device.translator.Translate({report, static_cast<size_t>(size)});
             if (!state) continue;
+            const ProExtra& extra = device.translator.pro_extra();
             std::lock_guard<std::mutex> lock(device.mutex);
-            if (std::memcmp(&*state, &device.state, sizeof(device.state)) != 0) {
+            if (std::memcmp(&*state, &device.state, sizeof(device.state)) != 0 ||
+                extra != device.pro_extra) {
                 device.state = *state;
+                device.pro_extra = extra;
                 device.packet_number++;
             }
         }
@@ -580,6 +592,12 @@ bool IsHidInstrument(const DeviceInfo& device) {
 }
 
 bool HidInstrumentsActive() { return g_active; }
+
+std::optional<ProExtra> HidInstrumentProExtra(uint64_t id) {
+    std::lock_guard<std::mutex> lock(HidInstrumentDriver::driver_mutex());
+    auto* driver = HidInstrumentDriver::driver();
+    return driver ? driver->ProExtraOf(id) : std::nullopt;
+}
 
 std::vector<HidInstrumentStatus> HidInstrumentStatuses() {
     std::lock_guard<std::mutex> lock(HidInstrumentDriver::driver_mutex());

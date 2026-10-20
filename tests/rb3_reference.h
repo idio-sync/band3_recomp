@@ -98,6 +98,8 @@ struct ProKeysRead {
     bool sustain = false;
     bool stomp_pedal = false;
     int expression_pedal = 0;
+    // the touchpad, which KeyboardController plays as the whammy (mod / 127)
+    int mod = 0;
 };
 
 inline ProKeysRead ReadProKeys(const std::array<uint8_t, 16>& d) {
@@ -112,6 +114,7 @@ inline ProKeysRead ReadProKeys(const std::array<uint8_t, 16>& d) {
     r.sustain = d[8] >> 7;
     r.stomp_pedal = d[9] >> 7;
     r.expression_pedal = d[9] & 0x7F;
+    r.mod = d[10] & 0x7F;
     return r;
 }
 

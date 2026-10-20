@@ -2,10 +2,12 @@
 #include <rex/input/input.h>
 #include <rex/input/input_system.h>
 #include <rex/types.h>
+#include <algorithm>
 #include <cstdint>
 #include <cstring>
 #include <mutex>
 #include "generated/band3_init.h"
+#include "src/Input/hid_instruments.h"
 #include "src/Input/input_lock.h"
 #include "src/Input/input_system.h"
 #include "src/Input/instruments.h"
@@ -17,7 +19,8 @@
 // XamInputRawState; ReXGlue only stubs that, so the bytes never arrive. The two
 // functions that read them, UsbMidiGuitar::Poll and UsbMidiKeyboard::Poll (run
 // at the end of JoypadPollCommon), get the bytes written first, from the same
-// XInput state the game already reads for the pad (see EncodeProData).
+// XInput state the game already reads for the pad (see EncodeProData), and
+// what the pad's PS3 or Wii keyboard sends past it (HidInstrumentProExtra).
 // Offsets are rb3-xenon's (src/system/os/Joypad.h).
 
 extern "C" void __imp__UsbMidiGuitar__Poll(PPCContext& ctx, uint8_t* base);
@@ -46,6 +49,20 @@ PPCContext CallContext(const PPCContext& ctx) {
 
 bool IsProSubtype(uint8_t subtype) {
     return subtype == kSubtypeProGuitar || subtype == kSubtypeKeytar;
+}
+
+// The bytes past the XInput state that the pad's own instrument sends, when
+// band3 reads it itself: a PS3 or Wii keyboard's touchpad, the keys' whammy.
+void AddProExtra(uint32_t pad, ProData& data) {
+    for (const InputDevice& device : PlayerDevices()) {
+        if (device.player != static_cast<int>(pad) + 1 || device.kind != DeviceKind::kPad) {
+            continue;
+        }
+        if (const auto extra = HidInstrumentProExtra(device.id)) {
+            std::copy(extra->begin(), extra->end(), data.begin() + kProExtraOffset);
+            return;
+        }
+    }
 }
 
 // Writes the pro data of every pad whose instrument reports `subtype`. Pads
@@ -83,7 +100,8 @@ void FillProData(PPCContext& ctx, uint8_t* base, uint8_t subtype) {
                          game_type, nullptr);
             continue;
         }
-        const ProData data = EncodeProData(LoadGamepad(state.gamepad));
+        ProData data = EncodeProData(LoadGamepad(state.gamepad));
+        AddProExtra(pad, data);
         std::memcpy(REX_RAW_ADDR(pad_data + kJoypadData_ProData), data.data(), data.size());
         RecordProPad(static_cast<int>(pad), true, caps.sub_type, game_type, &data);
     }

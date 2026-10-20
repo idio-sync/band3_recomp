@@ -69,9 +69,14 @@ public:
     // a report as read; nullopt if it is too short to be one
     std::optional<Gamepad360> Translate(std::span<const uint8_t> report);
 
+    // ProData's bytes past the XInput state, as of the last report: a
+    // keyboard's touchpad; zero for instruments that send none
+    const ProExtra& pro_extra() const { return pro_extra_; }
+
 private:
     HidInstrumentType type_;
     Ps3GuitarState ps3_guitar_;
+    ProExtra pro_extra_{};
 };
 
 }

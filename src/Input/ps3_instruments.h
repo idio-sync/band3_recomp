@@ -40,6 +40,12 @@ std::optional<Gamepad360> TranslatePs3Drums(std::span<const uint8_t> report, boo
 // are copied across; the face buttons and d-pad navigate as usual.
 std::optional<Gamepad360> TranslatePs3ProInstrument(std::span<const uint8_t> report);
 
+// The keyboard's ProData past the XInput state: its effects touchpad (report
+// byte 15's low 7 bits), which RB3 reads from ProKeysData byte 10 as the keys'
+// whammy (UsbMidiKeyboard::Poll's mod value, KeyboardController's mWhammy).
+// The Xbox 360 keyboard sends it past the XInput state too, as XUSB byte 12.
+std::optional<ProExtra> Ps3KeysProExtra(std::span<const uint8_t> report);
+
 // PS3 keyboards and Pro Guitars only send their buttons until they get this
 // 40-byte feature report (Wii ones send everything regardless), here as five
 // 8-byte reports, report ID first.

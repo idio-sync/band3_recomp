@@ -23,6 +23,8 @@ constexpr size_t kBlueVelocity = 14;
 // the keyboard's and Pro Guitar's ten bytes of 360-layout data, from the right
 // stick on
 constexpr size_t kProData = 5;
+// the keyboard's effects touchpad, in the triangle's pressure byte
+constexpr size_t kTouchpad = 15;
 
 // button bits
 constexpr uint16_t kSquare = 0x0001;
@@ -143,6 +145,14 @@ std::optional<Gamepad360> TranslatePs3ProInstrument(std::span<const uint8_t> rep
     g.thumb_rx = word(kProData + 6);
     g.thumb_ry = word(kProData + 8);
     return g;
+}
+
+std::optional<ProExtra> Ps3KeysProExtra(std::span<const uint8_t> report) {
+    const auto r = Body(report);
+    if (!r) return std::nullopt;
+    ProExtra extra{};
+    extra[0] = (*r)[kTouchpad] & 0x7F;
+    return extra;
 }
 
 std::span<const Ps3EnableReport> Ps3ProEnableReports() {

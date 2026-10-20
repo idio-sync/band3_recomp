@@ -139,6 +139,8 @@ std::optional<Gamepad360> HidInstrumentTranslator::Translate(std::span<const uin
     case kPs3DrumsRb1: return TranslatePs3Drums(report, false);
     case kPs3Drums: return TranslatePs3Drums(report, true);
     case kPs3Keys:
+        if (const auto extra = Ps3KeysProExtra(report)) pro_extra_ = *extra;
+        return TranslatePs3ProInstrument(report);
     case kPs3Mustang:
     case kPs3Squier: return TranslatePs3ProInstrument(report);
     case kPs4Guitar: return TranslatePs4Guitar(report);

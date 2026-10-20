@@ -4,6 +4,7 @@
 // what RB3 does with an Xbox 360 instrument (rb3_reference.h).
 
 #include <doctest/doctest.h>
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <vector>
@@ -381,6 +382,35 @@ TEST_CASE("the PS3 enable falls back to five reports if the long one isn't taken
     none.accepts_up_to = 0;
     CHECK(SendPs3ProEnable([&](std::span<const uint8_t> r) { return none.Send(r); }) ==
           Ps3EnableResult::kFailed);
+}
+
+TEST_CASE("the PS3 keyboard's touchpad reaches RB3 as the keys' whammy") {
+    HidInstrumentTranslator t(HidInstrumentType::kPs3Keys);
+    // the touchpad in byte 15's low 7 bits, the top bit not part of it
+    const Report report = Report().Byte(5, 0x80).Byte(8, 100).Byte(15, 0x80 | 0x55);
+    const auto g = t.Translate(report.bytes);
+    REQUIRE(g.has_value());
+
+    ProData data = EncodeProData(*g);
+    std::copy(t.pro_extra().begin(), t.pro_extra().end(), data.begin() + kProExtraOffset);
+    const ProKeysRead read = ReadProKeys(data);
+    CHECK(read.mod == 0x55);
+    // and it leaves the keys alone
+    CHECK(read.pressed[0]);
+    CHECK(read.velocity[0] == 100);
+
+    // let go, it's back to 0
+    REQUIRE(t.Translate(Report().bytes).has_value());
+    CHECK(t.pro_extra() == ProExtra{});
+}
+
+TEST_CASE("only the keyboard sends pro data past the XInput state") {
+    for (const auto type : {HidInstrumentType::kPs3Mustang, HidInstrumentType::kPs3Squier,
+                            HidInstrumentType::kPs3Guitar}) {
+        HidInstrumentTranslator t(type);
+        REQUIRE(t.Translate(Report().Byte(15, 0x7F).bytes).has_value());
+        CHECK(t.pro_extra() == ProExtra{});
+    }
 }
 
 TEST_CASE("a short PS3 keyboard report is dropped") {

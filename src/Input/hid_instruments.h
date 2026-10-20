@@ -2,6 +2,7 @@
 #include <chrono>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 #include <rex/input/input_driver.h>
@@ -28,6 +29,11 @@ bool IsHidInstrument(const rex::input::DeviceInfo& device);
 // driver is reading, going by the USB ids in its SDL GUID, so the player
 // assignment can leave it out instead of it also showing up as a controller
 bool IsSdlCopyOfHidInstrument(const rex::input::DeviceInfo& device);
+
+// the bytes of RB3's pro data past the XInput state (instruments.h's
+// ProExtra) that one of the HID driver's instruments sends, by its device id;
+// nullopt if it isn't one of them, or it's gone
+std::optional<ProExtra> HidInstrumentProExtra(uint64_t id);
 
 // For the Instrument Lab.
 
