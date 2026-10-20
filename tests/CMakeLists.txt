@@ -63,6 +63,7 @@ add_executable(band3_tests
     soft_raster_test.cpp
     sample_model_test.cpp
     deferred_decode_test.cpp
+    bitmap_readback_test.cpp
     movie_planes_test.cpp
     music_video_test.cpp
     mogg_test.cpp
