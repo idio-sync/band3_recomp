@@ -1,0 +1,93 @@
+# Makes a piece of art in the Art Library from where render_screens_boot.b3t
+# leaves Rock Band 3 Deluxe (the welcome hint, on a fresh profile): Customize,
+# Customize Band, Edit Band Logo, Create New Art, one sticker as its only
+# layer, then Finish Editing and Save Changes. Saving copies the art maker's
+# render target into the new piece's own texture on the CPU
+# (PatchPanel::CopyToPatch, PatchDir::CacheRenderedTex: DxTex::LockBitmap on
+# the target, SetBitmap on the piece's texture), so the library's thumbnail
+# and the clipboard's big preview after it show the pixels that copy got.
+# LockBitmap untiles guest memory's copy of the target, and only a resolve
+# puts the target's pixels there: under --renderer=native nothing does (the
+# sync-only GPU draws nothing), nor under --renderer=emulated without
+# --readback_resolve=fast or full. Until 2026-10-20 the piece was colourful
+# noise (whatever the memory held, a different pattern each run), while the
+# art maker's own clipboard and the save prompt's New thumbnail, drawn from
+# the target itself, were right: art-maker-* right, art-library-new* noise
+# was the bug. Under native, src/Hooks/bitmap_readback.cpp now draws the
+# target again on the CPU from its recorded passes into the bitmap (the
+# log's "Target readback:" line); under emulated without readback_resolve
+# it's still noise.
+#   python tools/band3ctl.py launch --fresh -- --renderer=native --test_random_seed=21 --async_shader_compilation=false
+#   python tools/band3ctl.py run tests/game/render_screens_boot.b3t
+#   python tools/band3ctl.py run tests/game/art_library.b3t
+# The piece is saved in the profile with the pixels it was given and comes
+# back so at the next launch, under either renderer.
+# Screenshots are under screenshots/ next to the exe: art-* the window's
+# picture, art-*-native the native renderer's drawing of the same moment
+# (under --renderer=emulated, from the guest memory the emulated GPU reads).
+# It leaves the game on the main menu.
+
+# the welcome hint: Continue, to the main menu
+wait screen=hint_rb3_welcome_screen timeout=30s
+sleep 1s
+press down
+sleep 333ms
+press green until screen=main_hub_screen timeout=30s
+sleep 2s
+
+# Customize, Customize Band, Edit Band Logo: the Art Library, empty but for
+# No Art. From the band's practice space it's a screen of its own; after
+# the art maker it's patch_select_screen
+press down
+sleep 333ms
+press down
+sleep 333ms
+press down
+sleep 500ms
+press green
+sleep 1s
+press green until screen=manage_band_screen timeout=30s
+sleep 1500ms
+press down
+sleep 500ms
+press green until screen=patch_select_practice_space_screen timeout=30s
+sleep 2s
+screenshot art-library-empty
+
+# Create New Art, the slot after No Art: the art maker (patch_screen)
+press right
+sleep 500ms
+press green until screen=patch_screen timeout=30s
+sleep 2s
+# Add New Layer's first category (New York Adorned Tattoo) and its first
+# sticker (the tree), which becomes Layer 1. The clipboard is the art maker's
+# render target drawn live, right under either renderer
+press green
+sleep 2s
+press green
+sleep 2s
+screenshot art-maker-layer
+screenshot native art-maker-layer-native
+# Finish Editing: the save prompt, with the old (blank) and new art
+press red
+sleep 2s
+screenshot art-maker-save
+screenshot native art-maker-save-native
+
+# Save Changes: CopyToPatch runs, and the library comes back with the new
+# piece chosen, its menu (Apply Art...) and the clipboard showing it
+press green until screen=patch_select_screen timeout=30s
+sleep 2s
+screenshot art-library-new
+screenshot native art-library-new-native
+# back out of its menu: the library's thumbnail, the clipboard behind
+press red
+sleep 1500ms
+screenshot art-library-new-closed
+screenshot native art-library-new-closed-native
+
+# back to the main menu
+press red until screen=manage_band_screen timeout=30s
+sleep 1500ms
+press red until screen=main_hub_screen timeout=30s
+sleep 1s

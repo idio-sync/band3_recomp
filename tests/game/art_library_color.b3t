@@ -1,0 +1,111 @@
+# art_library.b3t with a red sticker, to check the colour order of a target
+# read back under --renderer=native (src/Render/bitmap_readback.h writes each
+# texel as bytes A R G B). art_library.b3t's sticker is grey, so red and blue
+# swapped wouldn't show; this one is Paul Slifer's Red Hot & Blue Tattoo's
+# first sticker (the wizard and the dragon), its colour changed to the
+# palette's red (Change Color, the fifth swatch). Swapped, the saved piece
+# would come out blue where the art maker's clipboard is red.
+# From where render_screens_boot.b3t leaves Rock Band 3 Deluxe (the welcome
+# hint, on a fresh profile):
+#   python tools/band3ctl.py launch --fresh -- --renderer=native --test_random_seed=21 --async_shader_compilation=false
+#   python tools/band3ctl.py run tests/game/render_screens_boot.b3t
+#   python tools/band3ctl.py run tests/game/art_library_color.b3t
+# The reference is --renderer=emulated --readback_resolve=full, where the
+# emulated GPU resolves the target into guest memory and the game's own
+# untile reads it. Compare artc-library-new-closed's clipboard (the saved
+# piece) between the two, and with artc-maker-layer (the target drawn live,
+# right under either renderer).
+# Screenshots are under screenshots/ next to the exe: artc-* the window's
+# picture, artc-*-native the native renderer's drawing of the same moment.
+# It leaves the game on the main menu.
+
+# the welcome hint: Continue, to the main menu
+wait screen=hint_rb3_welcome_screen timeout=30s
+sleep 1s
+press down
+sleep 333ms
+press green until screen=main_hub_screen timeout=30s
+sleep 2s
+
+# Customize, Customize Band, Edit Band Logo: the Art Library, empty but for
+# No Art
+press down
+sleep 333ms
+press down
+sleep 333ms
+press down
+sleep 500ms
+press green
+sleep 1s
+press green until screen=manage_band_screen timeout=30s
+sleep 1500ms
+press down
+sleep 500ms
+press green until screen=patch_select_practice_space_screen timeout=30s
+sleep 2s
+
+# Create New Art, the slot after No Art: the art maker (patch_screen)
+press right
+sleep 500ms
+press green until screen=patch_screen timeout=30s
+sleep 2s
+# Add New Layer's third category (Paul Slifer's Red Hot & Blue Tattoo) and
+# its first sticker, black line art, which becomes Layer 1
+press down
+sleep 400ms
+press down
+sleep 400ms
+press green
+sleep 2s
+press green
+sleep 2s
+# Layer 1's options (Move, Rotate, Scale, Change Color, ...): Change Color,
+# whose swatches start white, grey, dark grey, black, red. Red turns the
+# sticker's lines red; Confirm keeps it, Back returns to the layer menu
+press green
+sleep 1500ms
+press down
+sleep 400ms
+press down
+sleep 400ms
+press down
+sleep 400ms
+press green
+sleep 1500ms
+press right
+sleep 400ms
+press right
+sleep 400ms
+press right
+sleep 400ms
+press right
+sleep 1500ms
+press green
+sleep 1500ms
+press red
+sleep 2s
+screenshot artc-maker-layer
+screenshot native artc-maker-layer-native
+# Finish Editing: the save prompt, with the old (blank) and new art
+press red
+sleep 2s
+screenshot artc-maker-save
+screenshot native artc-maker-save-native
+
+# Save Changes: CopyToPatch runs, and the library comes back with the new
+# piece chosen, its menu (Apply Art...) and the clipboard showing it
+press green until screen=patch_select_screen timeout=30s
+sleep 2s
+screenshot artc-library-new
+screenshot native artc-library-new-native
+# back out of its menu: the library's thumbnail, the clipboard behind
+press red
+sleep 1500ms
+screenshot artc-library-new-closed
+screenshot native artc-library-new-closed-native
+
+# back to the main menu
+press red until screen=manage_band_screen timeout=30s
+sleep 1500ms
+press red until screen=main_hub_screen timeout=30s
+sleep 1s

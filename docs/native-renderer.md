@@ -159,6 +159,9 @@ and vertical blanks, and draws nothing.
 - `emulated_gpu_while_native` doesn't apply, and F8 only logs that it needs `both`.
 - `compress_character_textures` is ignored: with nothing drawing the outfits in guest memory, a
   created character's outfit and skin came out black.
+- Art saved in the Art Library is drawn again on the CPU from the art maker's recorded passes,
+  as nothing puts the art maker's picture in guest memory for the game to copy (it saved noise).
+  The log says `Target readback:` with the time it took.
 - A GPU hang ends band3, with the crash trace: there's no device recovery to fall back on.
 - While the window is minimized nothing is drawn; restored, the next whole frame shows a frame
   or two later. Under `both` it draws on while minimized.

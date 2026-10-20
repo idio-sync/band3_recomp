@@ -2056,10 +2056,12 @@ void RecordCamera(const Guest& g, State& s, uint32_t cam) {
     cams.push_back(v);
 }
 
-void AppendPass(State& s, FrameCapture& fc, const PassRecord& rec) {
+// rec's pass, draws and shades onto fc's, its shades interned by `shades`;
+// needs no State, so BuildTargetCapture runs it without the lock
+void AppendPassTo(FrameCapture& fc, ShadeIndex& shades, const PassRecord& rec) {
     std::vector<int32_t> remap(rec.content.shades.size());
     for (size_t i = 0; i < remap.size(); i++)
-        remap[i] = InternShared(fc, s.shades, rec.content.shades, i);
+        remap[i] = InternShared(fc, shades, rec.content.shades, i);
     Pass p = rec.pass;
     p.first_draw = uint32_t(fc.draws.size());
     p.draw_count = uint32_t(rec.content.draws.size());
@@ -2069,6 +2071,10 @@ void AppendPass(State& s, FrameCapture& fc, const PassRecord& rec) {
         fc.draws.push_back(std::move(c));
     }
     fc.passes.push_back(std::move(p));
+}
+
+void AppendPass(State& s, FrameCapture& fc, const PassRecord& rec) {
+    AppendPassTo(fc, s.shades, rec);
     s.samples.insert(s.samples.end(), rec.samples.begin(), rec.samples.end());
     Lap(s, CaptureProfile::kStepPassAppend);
 }
@@ -2184,17 +2190,18 @@ void ForgetAnnounced(uint32_t tex) {
     g_announced.Forget(tex);
 }
 
-// Prepends the last recorded passes of render targets the frame samples but
-// didn't draw, transitively, and counts rt_sampled, rt_missing, rt_filtered.
-void CarryPasses(State& s, FrameCapture& fc) {
-    std::unordered_set<uint64_t> have;
-    for (const Pass& p : fc.passes)
-        if (p.tex_obj) have.insert(RtKey(p.tex_obj, p.version));
+// The recorded passes that make the render-target versions `samples` names
+// (RtKey) but `have` lacks, and transitively those they sample, each once in
+// the order found (a pass before what it samples); counts fc's rt_sampled,
+// rt_missing and rt_filtered. Under g_state_mutex; the records outlive it.
+std::vector<std::shared_ptr<const PassRecord>> FindSampledPasses(
+    const State& s, const std::vector<uint64_t>& samples, std::unordered_set<uint64_t>& have,
+    FrameCapture& fc) {
     std::vector<uint64_t> todo;
     std::unordered_set<uint64_t> seen;
-    for (uint64_t k : s.samples)
+    for (uint64_t k : samples)
         if (seen.insert(k).second) todo.push_back(k);
-    std::vector<const PassRecord*> carried;
+    std::vector<std::shared_ptr<const PassRecord>> found_passes;
     for (size_t i = 0; i < todo.size(); i++) {
         const uint64_t key = todo[i];
         if (have.count(key)) continue;
@@ -2203,27 +2210,38 @@ void CarryPasses(State& s, FrameCapture& fc) {
             fc.rt_filtered_keys.push_back(key);
             continue;
         }
-        const PassRecord* found = nullptr;
+        const std::shared_ptr<const PassRecord>* found = nullptr;
         if (auto it = s.rts.find(uint32_t(key >> 32)); it != s.rts.end()) {
-            for (const PassRecord* rec : {it->second.last.get(), it->second.before.get()})
-                if (rec && rec->pass.version == uint32_t(key)) found = rec;
+            for (const auto* rec : {&it->second.last, &it->second.before})
+                if (*rec && (*rec)->pass.version == uint32_t(key)) found = rec;
         }
         if (!found) {
             fc.rt_missing++;
             continue;
         }
         // a clear-only pass is carried
-        if (AllLeftOut(found->content)) {
+        if (AllLeftOut((*found)->content)) {
             fc.rt_filtered++;
             fc.rt_filtered_keys.push_back(key);
             continue;
         }
-        carried.push_back(found);
+        found_passes.push_back(*found);
         have.insert(key);
-        for (uint64_t k : found->samples)
+        for (uint64_t k : (*found)->samples)
             if (seen.insert(k).second) todo.push_back(k);
     }
     fc.rt_sampled = uint32_t(seen.size());
+    return found_passes;
+}
+
+// Prepends the last recorded passes of render targets the frame samples but
+// didn't draw, transitively, and counts rt_sampled, rt_missing, rt_filtered.
+void CarryPasses(State& s, FrameCapture& fc) {
+    std::unordered_set<uint64_t> have;
+    for (const Pass& p : fc.passes)
+        if (p.tex_obj) have.insert(RtKey(p.tex_obj, p.version));
+    const std::vector<std::shared_ptr<const PassRecord>> carried =
+        FindSampledPasses(s, s.samples, have, fc);
     Lap(s, CaptureProfile::kStepCarry);
     if (carried.empty()) return;
 
@@ -2232,7 +2250,7 @@ void CarryPasses(State& s, FrameCapture& fc) {
     fc.draws.clear();
     fc.passes.clear();
     size_t draws = own_draws.size(), shades = fc.shades.size();
-    for (const PassRecord* rec : carried) {
+    for (const auto& rec : carried) {
         draws += rec->content.draws.size();
         shades += rec->content.shades.size();
     }
@@ -2800,6 +2818,31 @@ std::shared_ptr<const FrameCapture> LatestCapture(
                                                                start)
                          .count();
     return latest;
+}
+
+bool BuildTargetCapture(uint32_t tex, FrameCapture& out, uint32_t& version) {
+    // the target's last pass first, then what it samples as found
+    std::vector<std::shared_ptr<const PassRecord>> passes;
+    {
+        std::lock_guard lock(g_state_mutex);
+        const State& s = S();
+        const auto it = s.rts.find(tex);
+        if (it == s.rts.end()) return false;
+        const RtState& rt = it->second;
+        if (!rt.last || rt.last->pass.version != rt.version || AllLeftOut(rt.last->content))
+            return false;
+        version = rt.version;
+        out.game_frame = s.game_frame;
+        std::unordered_set<uint64_t> have{RtKey(tex, version)};
+        passes = FindSampledPasses(s, rt.last->samples, have, out);
+        passes.insert(passes.begin(), rt.last);
+    }
+    // sealed records don't change, so they're copied without the lock;
+    // reversed, as CarryPasses does: what a pass samples comes before it
+    ShadeIndex shades;
+    for (auto it = passes.rbegin(); it != passes.rend(); ++it) AppendPassTo(out, shades, **it);
+    out.passes_carried = uint32_t(passes.size() - 1);
+    return true;
 }
 
 uint64_t LatestCaptureFrame() {
