@@ -35,6 +35,7 @@ add_executable(band3_tests
     vr_hud_test.cpp
     vr_venue_test.cpp
     vr_timing_test.cpp
+    vr_teleport_test.cpp
     target_premake_test.cpp
     camera_cut_test.cpp
     guest_memory_file_test.cpp

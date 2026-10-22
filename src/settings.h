@@ -197,6 +197,7 @@ REXCVAR_DECLARE(bool, native_view_hoist_passes);
 REXCVAR_DECLARE(bool, vr);
 REXCVAR_DECLARE(std::string, vr_viewpoint);
 REXCVAR_DECLARE(std::string, vr_viewpoint_offset);
+REXCVAR_DECLARE(bool, vr_hold_band);
 REXCVAR_DECLARE(double, vr_crowd_clear);
 REXCVAR_DECLARE(double, vr_eye_scale);
 REXCVAR_DECLARE(double, vr_window_eye_scale);
