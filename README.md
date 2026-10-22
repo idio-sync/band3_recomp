@@ -86,6 +86,8 @@ You need your own copy of the game; no game files are included. RB3 Deluxe is hi
   - Played on Windows (Direct3D 12) and a Steam Deck (Vulkan, RADV); other Linux drivers are
     untested
   - [Native renderer](docs/native-renderer.md) has the settings and what still differs
+- VR (experimental, Windows): play in a headset through OpenXR (`vr`), with the venue
+  in 3D around a 3D track ([settings](docs/settings-reference.md#native-renderer))
 
 ![20th Century Boy in a 21:9 window: the crowd and the lit stage fill the sides, the highway and HUD at their usual size in the middle](docs/images/ultrawide.jpg)
 
