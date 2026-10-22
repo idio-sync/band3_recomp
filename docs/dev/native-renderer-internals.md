@@ -391,6 +391,21 @@ What each does, how it was measured and why it defaults as it does. The
   the Steam Frame) the twelve fixed-viewpoint captures' eyes took 0.2-0.4 ms less GPU each
   (the world and post-processing, about two thirds of the pixels; the texture passes are
   their own size), the CPU the same; at 1 they're the pictures as before, pixel for pixel.
+  The eyes and the panel at two sizes, drawn by turns every frame, each need the frame's
+  targets (`scene`, `color`, `depth`, post-processing's levels, the overlay's MSAA pair,
+  the blur scratches) at their own size: `EnsureTargets` sets the frame's aside
+  (`gpu_view.cpp`'s `FrameTargets`, `SwapTargets`) rather than letting them go, and takes
+  the set aside back when the next picture is its size, so the eyes and the panel each
+  keep a set (one more at the eyes' size, ~120 MB at 2115x2115 with its readback buffer); a set left aside 2 s
+  (`kSpareTargetsKeep`: a size the window had) is let go. Before (2026-10-21) every eye
+  pair and panel made all of them again: the user's first live run from a fixed viewpoint
+  went to ~21 fps on the Steam Frame at 144 Hz, eyes 20.7 ms of CPU and the panel 20.2
+  (0.25 through the window, where both are 2424x2424), the slow-frame log's `plan: setup`
+  10.5-11 ms a picture and submits 4.6 ms. `eye_cost`'s `with_hud`, below, draws them by
+  turns as `VrFrame` does: at arena_04's three fixed viewpoints, eyes 2115x2115 and panel
+  2644x2644, eyes 22.9-23.8 ms (setup 10.3-11.3) and panel 20.0-20.5 (setup 12.4-12.7)
+  before, eyes 6.6-6.8 ms (setup 0.01) and panel 0.8-0.9 after, both waited for the GPU;
+  pictures the same, pixel for pixel.
   With `vr_shared_eyes` (on) the right eye keeps what the left drew of each texture pass
   that neither sees itself (`RasterOptions::keep_eye_passes`, `gpu_view.h`'s
   `KeepsEyePass`): none of its draws has the eye's world `view_proj` (`RePoseStats::
@@ -644,7 +659,8 @@ What each does, how it was measured and why it defaults as it does. The
   `eye_cost` is the left eye drawn as `VrFrame` draws it, GPU timestamps on, at the eyes'
   size and at the Steam Frame's (2644x2644, `frame`), medians of three rounds after one
   left out: RePose's ms, then the eye's frame drawn (`first`) and at once again (`second`,
-  as the right eye's would be), each with the CPU's parts (`plan_ms`, `upload_ms`,
+  as the right eye's would be), each with the CPU's parts (`plan_ms` and of it the targets'
+  `setup_ms`, `upload_ms`,
   `record_ms` and of it the texture passes' `record_passes_ms`, `submit_ms`, the slow SDL
   calls), what it drew and the GPU's ms by part (`world`, `pass_other`, `pass_shadow`,
   `pass_spot`, `mips`, `post` with the resolve's copies, `overlay`, `gamma`, `upload`,
@@ -663,6 +679,12 @@ What each does, how it was measured and why it defaults as it does. The
   captures): CPU RePose 0.1-0.2, record 0.2-0.6, GPU 0.7-1.1. The second drawing cost the
   same as the first: each eye draws every texture pass again. `frame.no_bloom` is both eyes
   drawn in one go at 2644x2644 without bloom and glare: their GPU ms and post-processing's.
+  `with_hud` (with `vr_hud`, both eyes in one go) is both eyes and then the HUD panel at
+  the headset's size, by turns, as `VrFrame` draws a frame, each waited for: the eyes'
+  CPU ms (`eyes_ms`, `eyes_setup_ms`) and the panel's (`hud_ms`, `hud_setup_ms`, its
+  `hud_size`). The rounds before it draw at one size throughout, so only `with_hud` shows
+  what changing size between the eyes and the panel costs (`out/vr/vr_eyes_hud.b3t` and
+  `with_hud_table.py` in the VR worktree).
   The 3D highway (`vr_track_3d`, on): in songs each eye draws the tracks from where it is,
   as an object in front of the head, in the default window and from `vr_anchor` alike.
   RB3 draws each track after post-processing with a camera of its own (z range 0..1),

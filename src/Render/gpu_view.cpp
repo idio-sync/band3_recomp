@@ -639,6 +639,33 @@ struct GpuRenderer::Impl {
         uint32_t w = 0, h = 0;
     };
     Scratch spot_scratch, light_scratch, soft_scratch, pre_scratch;
+    // The frame's targets above (every one ReleaseTargets lets go of) as
+    // made at another size, set aside by EnsureTargets rather than let go:
+    // VR draws its eyes at vr_eye_scale and its HUD panel at the headset's
+    // size, by turns every frame, and a fixed viewpoint's eyes (0.8) and the
+    // panel then made their targets again each time, 8-13 ms of planning a
+    // picture (and slower submits after) on the R9700 in its VM: live, 20 ms
+    // an eye pair and 20 the panel. SwapTargets trades them for the frame's
+    // own; a set aside for kSpareTargetsKeep without being drawn at again
+    // (a size the window had) is let go.
+    struct FrameTargets {
+        SDL_GPUTexture *scene = nullptr, *color = nullptr, *depth = nullptr;
+        SDL_GPUTexture *color_ms = nullptr, *depth_ms = nullptr;
+        uint32_t ms_samples = 1, ms_w = 0, ms_h = 0;
+        SDL_GPUTexture *behind = nullptr, *graded = nullptr;
+        SDL_GPUTransferBuffer* readback = nullptr;
+        uint32_t width = 0, height = 0;
+        SDL_GPUTexture *post_dof = nullptr, *post_velocity = nullptr;
+        uint32_t velocity_w = 0, velocity_h = 0;
+        SDL_GPUTexture* post_velocity_depth = nullptr;
+        SDL_GPUTexture* post_bloom[3] = {};
+        SDL_GPUTexture* post_tmp[3] = {};
+        uint32_t post_w[3] = {}, post_h[3] = {};
+        Scratch spot_scratch, light_scratch, soft_scratch, pre_scratch;
+    };
+    FrameTargets spare_targets;
+    std::chrono::steady_clock::time_point spare_since{};
+    static constexpr std::chrono::seconds kSpareTargetsKeep{2};
     // The trails' post buffer (RasterOptions::trails): the last post frame's
     // composite in tex[cur] (-1 none); the next writes the other. Like the
     // buffers below, apart from the frame's targets so captures at another
@@ -1052,6 +1079,10 @@ struct GpuRenderer::Impl {
     bool EnsureKept(PostBuffer& b, uint32_t w, uint32_t h);
     void ReleaseKept(PostBuffer& b);
     void ReleaseTargets();
+    // the frame's targets for spare_targets' and back (FrameTargets); and
+    // spare_targets let go of
+    void SwapTargets();
+    void ReleaseSpareTargets();
     // makes every pipeline a frame can ask for (the overlay's at
     // DeviceSamples(overlay_samples)) and the usual upload buffer, so no
     // frame stalls on them; with `hud`, PrewarmHud's too
@@ -1659,6 +1690,7 @@ void GpuRenderer::Impl::Release(bool stop_video) {
         if (no_depth) SDL_ReleaseGPUTexture(device, no_depth);
         if (no_bones) SDL_ReleaseGPUBuffer(device, no_bones);
         ReleaseTargets();
+        ReleaseSpareTargets();
         ReleaseHistory();
         ReleaseKept(post_buffer);
         ReleaseKept(pre_buffer);
@@ -1717,6 +1749,7 @@ void GpuRenderer::Impl::Release(bool stop_video) {
     hw_samplers.clear();
     white = black = no_depth = nullptr;
     ReleaseTargets();  // released above: forgets them
+    ReleaseSpareTargets();
     ReleaseHistory();
     ReleaseKept(post_buffer);
     ReleaseKept(pre_buffer);
@@ -2716,7 +2749,56 @@ bool GpuRenderer::Impl::EnsureKept(PostBuffer& b, uint32_t w, uint32_t h) {
     return true;
 }
 
+void GpuRenderer::Impl::SwapTargets() {
+    FrameTargets& s = spare_targets;
+    using std::swap;
+    swap(scene, s.scene);
+    swap(color, s.color);
+    swap(depth, s.depth);
+    swap(color_ms, s.color_ms);
+    swap(depth_ms, s.depth_ms);
+    swap(ms_samples, s.ms_samples);
+    swap(ms_w, s.ms_w);
+    swap(ms_h, s.ms_h);
+    swap(behind, s.behind);
+    swap(graded, s.graded);
+    swap(readback, s.readback);
+    swap(width, s.width);
+    swap(height, s.height);
+    swap(post_dof, s.post_dof);
+    swap(post_velocity, s.post_velocity);
+    swap(velocity_w, s.velocity_w);
+    swap(velocity_h, s.velocity_h);
+    swap(post_velocity_depth, s.post_velocity_depth);
+    for (int k = 0; k < 3; k++) {
+        swap(post_bloom[k], s.post_bloom[k]);
+        swap(post_tmp[k], s.post_tmp[k]);
+        swap(post_w[k], s.post_w[k]);
+        swap(post_h[k], s.post_h[k]);
+    }
+    swap(spot_scratch, s.spot_scratch);
+    swap(light_scratch, s.light_scratch);
+    swap(soft_scratch, s.soft_scratch);
+    swap(pre_scratch, s.pre_scratch);
+}
+
+void GpuRenderer::Impl::ReleaseSpareTargets() {
+    SwapTargets();
+    ReleaseTargets();
+    SwapTargets();
+}
+
 bool GpuRenderer::Impl::EnsureTargets(uint32_t w, uint32_t h) {
+    if (color && w == width && h == height) {
+        if (spare_targets.color &&
+            std::chrono::steady_clock::now() - spare_since > kSpareTargetsKeep)
+            ReleaseSpareTargets();
+        return true;
+    }
+    // these set aside (FrameTargets), and the set aside back if it's the
+    // size wanted; else that one, at a third size, made again
+    SwapTargets();
+    spare_since = std::chrono::steady_clock::now();
     if (color && w == width && h == height) return true;
     ReleaseTargets();
     counts.textures++;

@@ -482,7 +482,7 @@ public:
 
     // Three rounds' GpuStats of one picture as `eye_cost` has them, each the
     // median of its three: the CPU's ms to the picture read back and its
-    // parts (planning, upload, recording, submitting), what it drew, and with
+    // parts (planning and its setup, upload, recording, submitting), what it drew, and with
     // timestamps the GPU's ms by part (gpu_timing_model.h), the readback left
     // out (`gpu_ms`): the world, the texture passes (outfits, heads, the
     // crowd's impostors, NgLight's shadow: pass_other; self-shadow maps;
@@ -504,7 +504,8 @@ public:
             return g.gpu_timed ? g.gpu_total_ms - g.gpu_ms[t::kReadback] : -1.0;
         });
         return std::format(
-            "{{\"ms\":{:.3f},\"plan_ms\":{:.3f},\"upload_ms\":{:.3f},\"record_ms\":{:.3f},"
+            "{{\"ms\":{:.3f},\"plan_ms\":{:.3f},\"setup_ms\":{:.3f},\"upload_ms\":{:.3f},"
+            "\"record_ms\":{:.3f},"
             "\"record_passes_ms\":{:.3f},"
             "\"submit_ms\":{:.3f},\"acquire_ms\":{:.3f},\"first_draw_ms\":{:.3f},"
             "\"uniform_slow_ms\":{:.3f},\"draw_slow_ms\":{:.3f},\"submits\":{:.0f},"
@@ -516,6 +517,7 @@ public:
             "\"overlay\":{:.3f},\"gamma\":{:.3f},\"upload\":{:.3f},\"idle\":{:.3f}}}}}",
             mid([](const GpuStats& g) { return g.ms; }),
             mid([](const GpuStats& g) { return g.plan_ms; }),
+            mid([](const GpuStats& g) { return g.plan_setup_ms; }),
             mid([](const GpuStats& g) { return g.upload_ms; }),
             mid([](const GpuStats& g) { return g.record_ms; }),
             mid([](const GpuStats& g) { return g.record_passes_ms; }),
@@ -813,6 +815,47 @@ public:
                         first[round - 1] = std::move(gs[0]);
                         second[round - 1] = std::move(gs[1]);
                     }
+                    // As VrFrame draws a frame with vr_hud: both eyes in one
+                    // go, then the HUD panel at the headset's size (not the
+                    // eye scale's), by turns, each waited for (`with_hud`:
+                    // the eyes' CPU ms and of it planning's setup, the
+                    // panel's likewise; medians of three after one). The
+                    // rounds above draw the eyes alone, one size throughout.
+                    std::string with_hud;
+                    if (together && REXCVAR_GET(vr_hud)) {
+                        render::RasterOptions ho = eo;
+                        ho.part = render::BackBufferPart::kHud;
+                        ho.msaa = options.msaa;
+                        ho.width = z ? kFrameEye : eye_w;
+                        ho.height = z ? kFrameEye : eye_h;
+                        ho.gpu_no_wait = false;
+                        render::ScaleForPicture(ho);
+                        double ms[4][3] = {};  // eyes, eyes' setup, panel, panel's setup
+                        bool measured = true;
+                        for (int round = 0; round < 4 && measured; round++) {
+                            render::GpuStats pair[2], hud;
+                            render::vr::EyeOverride ov[2];
+                            render::GpuOutput hud_out;
+                            measured = both_eyes(timed, pair, ov, nullptr, true) &&
+                                       render::GpuRenderer::Get().RenderFrameToOutput(
+                                           frame, ho, render::GpuRenderer::HudSlot(), hud_out,
+                                           hud);
+                            if (!measured || round == 0) continue;
+                            ms[0][round - 1] = pair[0].ms + pair[1].ms;
+                            ms[1][round - 1] = pair[0].plan_setup_ms;
+                            ms[2][round - 1] = hud.ms;
+                            ms[3][round - 1] = hud.plan_setup_ms;
+                        }
+                        if (measured)
+                            with_hud = std::format(
+                                ",\"with_hud\":{{\"hud_size\":[{},{}],\"eyes_ms\":{:.3f},"
+                                "\"eyes_setup_ms\":{:.3f},\"hud_ms\":{:.3f},"
+                                "\"hud_setup_ms\":{:.3f}}}",
+                                ho.width, ho.height, Mid(ms[0][0], ms[0][1], ms[0][2]),
+                                Mid(ms[1][0], ms[1][1], ms[1][2]),
+                                Mid(ms[2][0], ms[2][1], ms[2][2]),
+                                Mid(ms[3][0], ms[3][1], ms[3][2]));
+                    }
                     if (!z) {
                         render::FrameCapture copy;
                         cleared = render::vr::RePose(frame, layout.eyes[0], copy).crowd_cleared;
@@ -850,7 +893,7 @@ public:
                         timed.width, timed.height, together ? "true" : "false",
                         Mid(repose[0], repose[1], repose[2]), EyeStatsJson(first),
                         EyeStatsJson(second));
-                    sizes[z] += no_bloom;
+                    sizes[z] += no_bloom + with_hud;
                     // as before: the first picture's CPU and GPU at the eyes' size
                     if (!z)
                         sizes[z] += std::format(
