@@ -980,6 +980,14 @@ REXCVAR_DEFINE_STRING(vr_viewpoint_offset, "", "Band3/Advanced/Native renderer",
     "from above, e.g. 1,-0.5,0.3,15. Empty leaves it where it's found. Takes effect at once")
     .debug_only();
 
+REXCVAR_DEFINE_BOOL(vr_hold_band, true, "Band3/Advanced/Native renderer",
+    "With vr and vr_viewpoint front_row, on_stage or venue: the band members stay where they "
+    "are at the game's camera cuts instead of jumping onto each shot's marks for its camera "
+    "and back to their places after it. They still walk and turn as they play, and one that "
+    "strays more than half a metre or 60 degrees from its place is drawn slowly back. Off, "
+    "they jump about as the game's camera wants them. Takes effect at the next cut")
+    .debug_only();
+
 REXCVAR_DEFINE_DOUBLE(vr_crowd_clear, 1.5, "Band3/Advanced/Native renderer",
     "With vr and vr_viewpoint front_row, on_stage or venue: the crowd within this many metres "
     "of your eyes across the floor isn't drawn, so you don't stand inside a crowd member's "

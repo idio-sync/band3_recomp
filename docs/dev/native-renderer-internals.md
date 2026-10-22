@@ -627,6 +627,41 @@ What each does, how it was measured and why it defaults as it does. The
   squashed to a point in its capture (`Eye::crowd_clear`, `RePose`: their world's or bones'
   axes zeroed, and the world's m[3][3], which scales a billboard card's corners, so the
   draws and passes stay), so the eye isn't inside a card.
+  The band is held still across the game's cuts there too (`vr_hold_band`, on by default;
+  `src/Hooks/vr_teleport.h`, game-side rather than in the renderer). RB3 moves every member
+  at every cut, twice over: `BandCamShot::StartAnim` keeps each target's local transform and
+  sets it to the shot's mark (`TeleportTarget(t, mXfm, false)`; marks were up to 3 m away at
+  small_club_01 and 10 m at arena_04, often turned 30 to 120 degrees), `EndAnim` sets it back
+  (`TeleportTarget(t, kept, true)`), and `BandWardrobe::StartVenueShot` flags each member to go
+  home at its next `BandCharacter::Poll` (`Teleport` onto its waypoint, undoing the walking and
+  turning its clips did during the shot, up to a metre or so and as much as a half turn).
+  Held, `TeleportTarget` is skipped (`TeleportGate`: a member a shot moved before the hold
+  began is still put back as that shot ends) and the Poll's go-home flag (Pollable +1142,
+  Character +1534) cleared; instead a leash (`LeashStep`, in the Poll hook) moves the member's
+  local transform toward its waypoint's world transform (BandCharacter +1528; what
+  `Character::Teleport` copies), its heading turned about its feet, a little each frame:
+  free within 0.5 m and 60 degrees, the excess taken back over 1.5 s, past 1.25 m or 120
+  degrees over 0.4 s, never at once (a member walking off at 1 m/s settles 1.45 m out), then
+  `RndTransformable::SetDirty` as `Teleport` does. Shadows, instruments and lights follow, as
+  the game itself moves the member. Shots also hide band members (`StartAnim`'s
+  `SetShowing(!mHide)`: a drum close-up hides the rest of the band); from a fixed viewpoint,
+  held or not, `graphics.cpp`'s `StartAnim` hook clears each target's hide bit (0x04 of its
+  flags at +0x60) while `StartAnim` reads it, as it does self_shadow for `force_self_shadow`.
+  `vr_view.cpp` logs each stretch from a fixed viewpoint (`vr: from the fixed viewpoint, over
+  N frames, the band jumped ...`): jumps (a member moving over 0.25 m or turning over 30
+  degrees between two frames), teleports skipped, leash pulls, members kept showing, each
+  member's farthest and mean distance and turn from its waypoint, and the hooks' time on the
+  game's thread. In 20th Century Boy (2026-10-21, `out/vr/hold_ab_<venue>_front_row.b3t`:
+  stretches of 30 s off, on, off, on): small_club_01 31 and 25 jumps off (the biggest 1.45
+  and 3.28 m), 2 and 3 on (0.72 m, a member put back from a mark as the hold began, and 0.16
+  m); arena_04 39 and 45 off (4.84 and 9.99 m), 2 and 5 on (0.44 and 0.91 m, the same); a
+  whole song held at small_club_01, 4 (0.16 m) in 12,366 frames, 361 teleports skipped. Held,
+  the members stand 0.3 to 0.6 m from their waypoints on average (the leash's free radius; the
+  game's snaps home kept that 0.2 to 0.5 m at small_club_01, 0.7 to 1.9 m at arena_04 with
+  its far marks), turned 13 to 43 degrees; at most 1.0 to 1.6 m and, briefly, a half turn
+  (a clip turning faster than the leash). The hooks cost the game's thread 18 to 40 us a frame
+  held (1.3 to 1.7 us not), the renderer nothing. While held, the game's own picture on the
+  monitor shows its close-ups without the members on their marks.
   In 20th Century Boy (2026-10-18, captures with the stand-in head, no headset) the band
   was four members everywhere: arena_04 stage floor z 256, audience 205, front_row at
   5,-647,272, on_stage 41,-536,323, venue 10,-1082,436 (x,y,z; its drummer on a riser 11 m

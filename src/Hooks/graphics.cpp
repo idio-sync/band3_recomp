@@ -13,6 +13,7 @@
 #include <thread>
 #include "generated/band3_init.h"
 #include "src/Hooks/frame_pacing.h"
+#include "src/Hooks/vr_view.h"
 #include "src/Launcher/launcher_platform.h"
 #include "src/Render/sync_gpu/native_only.h"
 #include "src/Render/sync_gpu/sync_graphics_system.h"
@@ -55,35 +56,52 @@ extern "C" REX_FUNC(RndMat__Load)
 // back on). The flag is set on the shot's targets while StartAnim reads them
 // and cleared again after, so the shot's own data stays as loaded; the crowd,
 // which turns its characters' off itself, is left alone.
+// And from VR's fixed viewpoints (vr_view.h's ShotMayHideBand), likewise each
+// target's hide flag is cleared while StartAnim reads it: StartAnim shows a
+// target only without it (SetShowing(!mHide): a drum close-up hides the rest
+// of the band), and a fixed viewpoint draws the whole band in every shot.
 extern "C" void __imp__BandCamShot__StartAnim(PPCContext& ctx, uint8_t* base);
 extern "C" REX_FUNC(BandCamShot__StartAnim)
 {
-    if (!REXCVAR_GET(force_self_shadow)) {
+    const bool self_shadow = REXCVAR_GET(force_self_shadow);
+    const bool show = !band3::vr_view::ShotMayHideBand();
+    if (!self_shadow && !show) {
         __imp__BandCamShot__StartAnim(ctx, base);
         return;
     }
     // ObjList<Target> mTargets at 0x19C, a std::list with its head node in the
     // shot: a node's next at 0 and its Target at 8, the Target's flag bits at
-    // 0x60 with self_shadow 0x20 (rb3-xenon's BandCamShot.h; StartAnim reads them)
+    // 0x60 with self_shadow 0x20 and hide 0x04 (rb3-xenon's BandCamShot.h;
+    // StartAnim reads them)
     constexpr uint32_t kTargets = 0x19C;
     constexpr uint32_t kNodeFlags = 8 + 0x60;
-    constexpr uint8_t kSelfShadow = 0x20;
+    constexpr uint8_t kSelfShadow = 0x20, kHide = 0x04;
     const uint32_t head = ctx.r3.u32 + kTargets;
-    uint32_t forced[64];
-    size_t count = 0;
-    for (uint32_t node = REX_LOAD_U32(head); node != 0 && node != head && count < std::size(forced);
+    // each changed target's node and the flags it had
+    uint32_t changed[64];
+    uint8_t had[64];
+    size_t count = 0, forced = 0, shown = 0;
+    for (uint32_t node = REX_LOAD_U32(head); node != 0 && node != head && count < std::size(changed);
          node = REX_LOAD_U32(node)) {
         const uint8_t flags = REX_LOAD_U8(node + kNodeFlags);
-        if (!(flags & kSelfShadow)) {
-            REX_STORE_U8(node + kNodeFlags, flags | kSelfShadow);
-            forced[count++] = node;
+        uint8_t now = flags;
+        if (self_shadow && !(flags & kSelfShadow)) {
+            now |= kSelfShadow;
+            forced++;
         }
+        if (show && (flags & kHide)) {
+            now &= ~kHide;
+            shown++;
+        }
+        if (now == flags) continue;
+        REX_STORE_U8(node + kNodeFlags, now);
+        changed[count] = node;
+        had[count++] = flags;
     }
-    if (count) REXLOG_DEBUG("force_self_shadow: {} target(s) of shot {:08X}", count, head - kTargets);
+    if (forced) REXLOG_DEBUG("force_self_shadow: {} target(s) of shot {:08X}", forced, head - kTargets);
+    if (shown) band3::vr_view::BandKeptShowing(uint32_t(shown));
     __imp__BandCamShot__StartAnim(ctx, base);
-    for (size_t i = 0; i < count; i++) {
-        REX_STORE_U8(forced[i] + kNodeFlags, REX_LOAD_U8(forced[i] + kNodeFlags) & ~kSelfShadow);
-    }
+    for (size_t i = 0; i < count; i++) REX_STORE_U8(changed[i] + kNodeFlags, had[i]);
 }
 
 extern "C" void __imp__ProcCounter__ProcCommands(PPCContext& ctx, uint8_t* base);
