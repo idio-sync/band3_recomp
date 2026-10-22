@@ -180,7 +180,7 @@ TEST_CASE("HUD draws go to pieces by where RB3 lays them out") {
     CHECK(vr::HudPieceOf(Padded({0.4f, 0.6f, 0.6f, 0.7f})) == HudPiece::kRest);
 }
 
-TEST_CASE("a song's HUD in pieces: the tracks' draws aren't, a menu or a fade over it keeps it whole") {
+TEST_CASE("a song's HUD in pieces, the tracks' draws not; a menu or a fade keeps it whole") {
     const std::vector<vr::PictureRect> cards = {kMeter, kMeterIcon, kScoreBox, kProgressIcon,
                                                 kTime,  kTitle,     kLyrics};
     FrameCapture f = HudFrame(cards);
@@ -552,7 +552,7 @@ TEST_CASE("the top strip above the window, or ahead and up from a fixed viewpoin
     // the lyrics (the picture's middle) straight ahead of the head; the
     // title to their right, as in the picture
     CHECK(top->quad.pose.p[0] > 0);
-    // from a fixed viewpoint: 2.5 m ahead and 15 degrees up
+    // from a fixed viewpoint: 2.5 m ahead and 20 degrees up
     l = SongLayout(Tracks(1), false);
     REQUIRE_FALSE(l.window);
     split = vr::PlaceHudPieces(l, StandingHead(), p, s);
@@ -560,7 +560,7 @@ TEST_CASE("the top strip above the window, or ahead and up from a fixed viewpoin
     REQUIRE(top);
     PointOf(*top, 0.5f, p.anchor[2][1], c);
     CHECK(c[0] == doctest::Approx(0).epsilon(1e-4));
-    CHECK(c[1] == doctest::Approx(1.6f + 2.5f * std::tan(15 * kPi / 180)).epsilon(1e-4));
+    CHECK(c[1] == doctest::Approx(1.6f + 2.5f * std::tan(20 * kPi / 180)).epsilon(1e-4));
     CHECK(c[2] == doctest::Approx(-2.5f).epsilon(1e-4));
     // the meter and score as through the window
     CHECK(split.beside);
@@ -596,7 +596,9 @@ TEST_CASE("two players' and four parts' meter and score above the tracks' middle
             vr::TrackToLocal(l.tracks[t], l.track_scale, far, f);
             above = std::fmax(above, (f[1] - 1.6f) / std::sqrt(f[0] * f[0] + f[2] * f[2]));
         }
-        CHECK((m[1] - 1.6f) / std::sqrt(m[0] * m[0] + m[2] * m[2]) > above);
+        // and over the badge above its far end
+        const float clear = std::atan2(m[1] - 1.6f, std::sqrt(m[0] * m[0] + m[2] * m[2]));
+        CHECK(clear * 180 / kPi >= std::atan(above) * 180 / kPi + vr::kAboveTracksDeg - 0.01f);
         // nearly straight ahead
         CHECK(std::fabs(std::atan2(meter->quad.pose.p[0], -meter->quad.pose.p[2])) < 0.2f);
         // allowed further aside (two players' at 38 and 42 degrees, four

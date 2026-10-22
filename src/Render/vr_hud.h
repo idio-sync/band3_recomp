@@ -403,7 +403,7 @@ struct HudSplitLayout {
     // top strip's bottom middle this many metres ahead along the floor and
     // this many degrees above the eyes
     float lyrics_distance = 2.5f;
-    float lyrics_elevation = 15;
+    float lyrics_elevation = 20;
 };
 
 struct HudPieceQuad {
@@ -427,8 +427,9 @@ struct HudSplit {
 inline constexpr float kTrackHalfWidth = 9.8f;
 inline constexpr float kTrackFar = 106;
 // the meter and score above the tracks' middle clear the tracks' far ends by
-// this many metres, seen from the head
-inline constexpr float kAboveTracks = 0.03f;
+// this many degrees, seen from the head: each track's instrument badge stands
+// over its far end (11 degrees tall from the head, four parts')
+inline constexpr float kAboveTracksDeg = 13;
 
 // A quad's turn that faces `from` (its +z toward it) from `at`, level: a yaw,
 // then a pitch toward it (YawPitch)
@@ -482,8 +483,8 @@ inline HudPieceQuad PieceFacing(HudPiece kind, const PictureRect& r, float au, f
 //   or, where either's middle would be more than `side_max` degrees from
 //     straight ahead, both above the tracks' middle (halfway between the
 //     outermost edges, as deep as the strikeline nearest it), `side_gap`
-//     apart either side of it, their bottoms clear of every track's far end
-//     seen from the head
+//     apart either side of it, their bottoms kAboveTracksDeg over every
+//     track's far end seen from the head
 //   top: the picture's middle (u 0.5) at its bottom edge `lyrics_height`
 //     above the window's top edge's middle, or from a fixed viewpoint
 //     `lyrics_distance` ahead and `lyrics_elevation` degrees up
@@ -564,7 +565,8 @@ inline HudSplit PlaceHudPieces(const FrameLayout& l, const XrPose& head, const H
             if (std::fabs(across(strike[t]) - mid) < std::fabs(across(strike[closest]) - mid))
                 closest = t;
         const float depth = ahead(strike[closest]);
-        const float up = head.p[1] + depth * std::tan(far_up) + kAboveTracks;
+        const float up =
+            head.p[1] + depth * std::tan(far_up + kAboveTracksDeg * 3.14159265f / 180);
         for (int c = 0; c < 3; c++) {
             const float at = head.p[c] + fwd[c] * depth + right[c] * mid;
             meter_at[c] = at - right[c] * s.side_gap / 2;

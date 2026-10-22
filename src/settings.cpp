@@ -1158,7 +1158,7 @@ REXCVAR_DEFINE_DOUBLE(vr_lyrics_distance, 2.5, "Band3/Advanced/Native renderer",
     .range(0.5, 20.0)
     .debug_only();
 
-REXCVAR_DEFINE_DOUBLE(vr_lyrics_elevation, 15.0, "Band3/Advanced/Native renderer",
+REXCVAR_DEFINE_DOUBLE(vr_lyrics_elevation, 20.0, "Band3/Advanced/Native renderer",
     "With vr_hud_split, from a fixed vr_viewpoint: how high the strip with the lyrics, the "
     "vocals and the song's title starts, in degrees above your eyes. Takes effect at once")
     .range(-45.0, 80.0)
