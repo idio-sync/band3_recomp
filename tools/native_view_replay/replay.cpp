@@ -22,7 +22,7 @@
 //                               [--no-gamma | --gamma-from <other.cap>]
 //                               [--scale <f>] [--shadow-scale <f>] [--msaa 1|2|4]
 //                               [--overlay-only | --split-check] [--hud-from <draw>]
-//                               [--track-eyes]
+//                               [--track-eyes] [--hud-pieces]
 //                               [--track-at x,y,z [--track-layout f,d,p,s]
 //                                [--look-down <deg>] [--track-far <y>]]
 //
@@ -174,7 +174,11 @@
 // field of view, near and far, and how far ahead the track's origin, its
 // strikeline, is); with --track-eyes, --overlay-only and --split-check give
 // their draws to the eyes' picture (RasterOptions::eye_cams), as VR does in
-// songs, so the panel loses the track and the eyes' picture has it.
+// songs, so the panel loses the track and the eyes' picture has it, and
+// print the panel's pieces (vr_hud.h's HudPiecesOf: the band meter, the
+// score, the top strip, the rest, each one's rectangle of the picture, and
+// whether it's split or whole), with --hud-pieces each draw's rectangle and
+// piece too.
 // --track-at x,y,z draws VR's two eyes in a song without a headset
 // (vr_pose.h's ResolveFrame): a stand-in head 1.6 m up at LOCAL's origin
 // facing -z, moved x,y,z metres (lean to see the parallax), the eyes 64 mm
@@ -184,8 +188,9 @@
 // 1.2,0.3,0,30). Into out.L.png and out.R.png, the HUD panel without the
 // tracks into out.hud.png, and it prints where each track's strikeline,
 // edges, near end and the point --track-far units along it (106: where the
-// game's picture shows the track fade out) are from the head; --pick names
-// the draw at that pixel of the left eye.
+// game's picture shows the track fade out) are from the head, and where
+// vr_hud_split's defaults hang the panel's pieces (PlaceHudPieces); --pick
+// names the draw at that pixel of the left eye.
 //
 // Build (from the repository root):
 //   clang++ -std=c++20 -O2 -I. tools/native_view_replay/replay.cpp
@@ -210,6 +215,7 @@
 #include "src/Render/shade_model.h"
 #include "src/Render/soft_raster.h"
 #include "src/Render/free_cam.h"
+#include "src/Render/vr_hud.h"
 #include "src/Render/vr_pose.h"
 
 using namespace band3::render;
@@ -1194,6 +1200,39 @@ void ApplyFreeCam(FrameCapture& fc, bool move, const float eye[3], const float a
                 moved, eye[0], eye[1], eye[2], emptied);
 }
 
+// VR's HUD in pieces (vr_hud.h's HudPiecesOf) of the panel `ho` draws: each
+// piece's rectangle of the picture (u, v from its top left, 0..1) and draws;
+// with `each`, every draw's rectangle and piece
+vr::HudPieces PrintHudPieces(const FrameCapture& fc, const RasterOptions& ho, bool each) {
+    const vr::HudPieces p = vr::HudPiecesOf(fc, ho);
+    if (each) {
+        for (size_t d = HudFrom(ho, fc); d < fc.draws.size(); d++) {
+            const DrawItem& it = fc.draws[d];
+            if (!DrawnToBackBuffer(it) || !OnHud(ho, fc, d)) continue;
+            vr::PictureRect r;
+            if (!vr::HudDrawRect(fc, it, r)) {
+                std::printf("  hud draw #%zu camera %08X: shows nothing\n", d, it.cam);
+                continue;
+            }
+            std::printf("  hud draw #%zu camera %08X: u %.3f..%.3f v %.3f..%.3f %s\n", d, it.cam,
+                        r.u0, r.u1, r.v0, r.v1,
+                        r.u1 - r.u0 >= vr::kHudFull && r.v1 - r.v0 >= vr::kHudFull
+                            ? "the whole picture"
+                            : vr::HudPieceName(vr::HudPieceOf(r)));
+        }
+    }
+    std::printf("hud pieces: %s (%u draws over the whole picture, %u of a menu)",
+                p.split ? "split" : "whole", p.full, p.menu);
+    for (int k = 0; k < vr::kHudPieces; k++) {
+        const vr::PictureRect& r = p.rect[k];
+        if (r.Empty()) continue;
+        std::printf("; %s u %.3f..%.3f v %.3f..%.3f (%u draws)", vr::HudPieceName(vr::HudPiece(k)),
+                    r.u0, r.u1, r.v0, r.v1, p.draws[k]);
+    }
+    std::printf("\n");
+    return p;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -1220,7 +1259,7 @@ int main(int argc, char** argv) {
     bool sized = false;
     float scale = 0;  // --scale's, 0 none
     bool free_cam = false, world_only = false;
-    bool overlay_only = false, split_check = false, track_eyes = false;
+    bool overlay_only = false, split_check = false, track_eyes = false, hud_pieces = false;
     // --track-at's head, metres from the stand-in's; --track-layout's; --look-down's degrees
     bool track_at = false;
     float track_head[3] = {}, look_down = 0, track_far = 106;
@@ -1343,6 +1382,7 @@ int main(int argc, char** argv) {
         else if (a == "--overlay-only") overlay_only = true;
         else if (a == "--split-check") overlay_only = split_check = true;
         else if (a == "--track-eyes") track_eyes = true;
+        else if (a == "--hud-pieces") hud_pieces = true;
         else if (a == "--track-at" && i + 1 < argc)
             track_at = std::sscanf(argv[++i], "%f,%f,%f", &track_head[0], &track_head[1],
                                    &track_head[2]) == 3;
@@ -1731,6 +1771,23 @@ int main(int argc, char** argv) {
         RasterOptions ho = eo;
         ho.part = BackBufferPart::kHud;
         ho.msaa = o.msaa;
+        // and in pieces (vr_hud.h, vr_hud_split's defaults): where each hangs
+        // from the head (ahead, below, across), its size and how wide it looks
+        const vr::HudSplit split =
+            vr::PlaceHudPieces(l, in.head, PrintHudPieces(*fc, ho, hud_pieces), {});
+        std::printf("hud split: %d pieces, the meter and score %s\n", split.count,
+                    split.beside ? "beside the tracks" : "above their middle");
+        for (int i = 0; i < split.count; i++) {
+            const vr::HudPieceQuad& q = split.piece[i];
+            const float* c = q.quad.pose.p;
+            const float d[3] = {c[0] - in.head.p[0], c[1] - in.head.p[1], c[2] - in.head.p[2]};
+            std::printf("  %s: %.2f m ahead, %.2f below, %.2f across (%.2f m away), %.3f x %.3f m "
+                        "(%.1f x %.1f degrees)\n",
+                        vr::HudPieceName(q.kind), -d[2], -d[1], d[0], freecam::Len3(d),
+                        q.quad.size[0], q.quad.size[1],
+                        2 * std::atan2(q.quad.size[0] / 2, freecam::Len3(d)) * 57.29578f,
+                        2 * std::atan2(q.quad.size[1] / 2, freecam::Len3(d)) * 57.29578f);
+        }
         std::vector<uint32_t> hud;
         Rasterize(*fc, ho, hud);
         for (uint32_t& p : hud) p |= 0xff000000u;
@@ -1753,6 +1810,7 @@ int main(int argc, char** argv) {
         RasterOptions ho = o;
         ho.part = BackBufferPart::kHud;
         ho.hud_from = from;
+        if (track_eyes || hud_pieces) PrintHudPieces(*fc, ho, hud_pieces);
         std::vector<uint32_t> hud;
         const RasterStats rs = Rasterize(*fc, ho, hud);
         std::vector<uint32_t> px(hud.size()), alpha(hud.size());
