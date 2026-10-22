@@ -49,7 +49,7 @@ You need your own copy of the game; no game files are included. RB3 Deluxe is hi
 
 **Integrations** (RB3Enhanced-compatible)
 - Network events over UDP: Stage Kit lighting, song, band and venue info
-- Stage Kits lit directly: Santroller and Xbox 360 Stage Kits plugged in by USB, and the RB3E Dashboard's Pico W wireless kits found and tested from Settings > Lights
+- Stage Kits lit directly: Santroller and Xbox 360 Stage Kits plugged in by USB, and the Pico W wireless kits from [rb3e-stagekit-networked](https://github.com/idio-sync/rb3e-stagekit-networked) found and tested from Settings > Lights
 - A web page for browsing the song library from a phone and picking the next song, plus the RB3E web API
 - Score history: every finished song's results, with played and stars filters and a History tab on that page
 - Searching [RhythmVerse](https://rhythmverse.co) for custom songs from that page, and downloading them into the game without a restart
