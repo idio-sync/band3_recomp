@@ -64,6 +64,10 @@ struct FrameTiming {
     // (GpuStats::ms), its GPU (native_gpu_timestamps; 0 off) and RePose's copy
     double eye_submitted_ms[2] = {kNone, kNone};
     double eye_cpu_ms[2] = {0, 0}, eye_gpu_ms[2] = {0, 0}, repose_ms[2] = {0, 0};
+    // the texture passes the eyes drew (GpuStats::passes), and those their
+    // targets' layers held already or held an older picture of for now
+    // (passes_repeated, passes_spread)
+    uint32_t eye_passes = 0, eye_passes_kept = 0;
     // the HUD panel's picture, when one was drawn this frame
     bool hud = false;
     double hud_submitted_ms = kNone, hud_cpu_ms = 0, hud_gpu_ms = 0;
@@ -246,6 +250,9 @@ inline const std::vector<Part>& Parts() {
              const double gpu = t.eye_gpu_ms[0] + t.eye_gpu_ms[1];
              return gpu > 0 ? gpu : kNone;
          }},
+        {"eye_passes", [](const FrameTiming& t) {
+             return t.capture ? double(t.eye_passes) : kNone;
+         }},
         {"eyes_submitted_ms", [](const FrameTiming& t) { return t.eye_submitted_ms[1]; }},
         {"hud_cpu_ms", [](const FrameTiming& t) { return t.hud ? t.hud_cpu_ms : kNone; }},
         {"hud_gpu_ms",
@@ -333,7 +340,7 @@ inline std::string CsvHeader() {
            "hud_gpu_ms,eyes_wait_ms,hud_wait_ms,gpu_done_ms,present_ms,fence_wait_ms,acquire_ms,"
            "hud_acquire_ms,copy_ms,release_ms,end_frame_ms,ended_ms,located_to_end_ms,layer,"
            "window,window_ms,late,over_period,missed,slots_missed,late_wake,refresh_ms,throttled,"
-           "queue_wait,done_wait_ms\n";
+           "queue_wait,done_wait_ms,eye_passes,eye_passes_kept\n";
 }
 
 inline std::string CsvRow(const FrameTiming& t) {
@@ -398,8 +405,9 @@ inline std::string CsvRow(const FrameTiming& t) {
     num(PeriodMs(t));
     whole(t.throttled);
     whole(t.queue_wait);
-    std::snprintf(buf, sizeof(buf), "%.3f", t.done_wait_ms);
+    std::snprintf(buf, sizeof(buf), "%.3f,", t.done_wait_ms);
     out += buf;
+    out += std::to_string(t.eye_passes) + ',' + std::to_string(t.eye_passes_kept);
     out += '\n';
     return out;
 }

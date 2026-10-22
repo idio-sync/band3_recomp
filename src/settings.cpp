@@ -871,6 +871,13 @@ REXCVAR_DEFINE_BOOL(native_keep_carried_passes, true, "Band3/Advanced/Native ren
     "same; at 1080p on a Steam Deck the texture passes took about 4 ms of the GPU a frame. "
     "Off draws them every frame, as before, to compare");
 
+REXCVAR_DEFINE_BOOL(native_keep_repeated_passes, true, "Band3/Advanced/Native renderer",
+    "Keep what the native renderer drew for a texture the game drew rather than draw it "
+    "again where it would draw the same: the same drawing of the game's, drawn the same way "
+    "(a frame whose world is the last frame's, VR's eyes before the game moves on: the "
+    "crowd's pictures, the faces). The picture is the same. Off draws them every time, to "
+    "compare");
+
 REXCVAR_DEFINE_INT32(native_deferred_decode_threads, 2, "Band3/Advanced/Native renderer",
     "How many threads help the native renderer decode the textures and meshes a song's first "
     "frames and a camera cut show for the first time (over 4 MB of them), so it holds the "
@@ -1014,6 +1021,15 @@ REXCVAR_DEFINE_BOOL(vr_shared_eyes, true, "Band3/Advanced/Native renderer",
     "draws into textures that neither eye sees itself: the crowd's, the outfits', the "
     "shadows'): the same pictures for less CPU and GPU time. Off draws each eye whole, to "
     "compare. Takes effect at once")
+    .debug_only();
+
+REXCVAR_DEFINE_INT32(vr_impostor_frames, 2, "Band3/Advanced/Native renderer",
+    "With vr and vr_shared_eyes, where both eyes are drawn in one go (vr_viewpoint front_row, "
+    "on_stage or venue): the crowd's pictures, which the game draws again every frame, one "
+    "for each kind of crowd member, are drawn again over this many frames, a share each "
+    "frame, the rest showing their picture from a frame or so before (at most this many "
+    "less one). 1 draws every one every frame. Takes effect at once")
+    .range(1, 4)
     .debug_only();
 
 REXCVAR_DEFINE_DOUBLE(vr_window_width, 100.0, "Band3/Advanced/Native renderer",

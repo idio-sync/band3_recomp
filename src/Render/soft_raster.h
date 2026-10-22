@@ -258,6 +258,23 @@ struct RasterOptions {
     // KeepsEyePass)
     bool keep_eye_passes = false;
     Mat4 eye_view_proj{};
+    // GPU (native_keep_repeated_passes): a texture pass whose target's layer
+    // holds what it would draw isn't drawn again (gpu_view.h's KeepsRepeat:
+    // the same version of the game's, drawn with the same options, matrices
+    // and samples): a composed frame's world after its world frame drew it,
+    // VR's eyes from a capture the game hasn't moved on from
+    bool keep_repeats = false;
+    // GPU, VR's eyes in one go (vr_impostor_frames): a target several of the
+    // frame's passes draw a layer each of (PlanHoist's renamed: the crowd's
+    // impostors) has its layers drawn over this many frames, the ones drawn
+    // longest ago first, the rest left with an older picture of their pass
+    // for now, at most this many frames less one (gpu_view.h's SpreadDraws).
+    // 0 or 1 draws every one each frame
+    uint32_t spread_passes = 0;
+    // test (eye_cost): no layer counts as holding what its pass draws, as in
+    // a frame the game has moved on in, so keep_repeats keeps nothing and
+    // spread_passes leaves what it would
+    bool repeats_stale = false;
     // GPU, VR's eye drawn from the capture itself rather than vr::RePose's
     // copy of it (vr_pose.h's EyeOverride, from EyeOverrideOf): each draw as
     // the copy would have it (EyeDrawOf: its matrix, its shade's eye and

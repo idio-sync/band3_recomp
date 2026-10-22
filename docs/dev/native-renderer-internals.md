@@ -371,6 +371,35 @@ What each does, how it was measured and why it defaults as it does. The
   (its total 2.9-3.1 to 2.2-2.3), for 58 MB of layers (96 of them); without it record 1.0 to
   0.84, frames 1.72 to 1.64. At 4073x2291 with `vr_show_all` (the display went to 60 Hz, so
   even/odd frames) post frames went from 8.3 to 7.0 ms and world frames from 6.4 to 5.3.
+- `native_keep_repeated_passes` (on): a texture pass isn't drawn where its target's layer
+  holds what it would draw (`gpu_view.h`'s `RepeatKey`, `LayerHeld`, `KeepsRepeat`). Under
+  even/odd rendering a composed frame's world is its world frame's, the same passes of the
+  same versions, so the crowd's impostors (every one of them a version of its own) were
+  drawn again for every frame that drew that world: in 20th Century Boy at arena_04 with
+  `vr_show_all` (2026-10-22, a check in the plan), 12,600 of 25,200 impostor passes over
+  300 frames had the same draws, matrices, bones and shades as the frame before's into the
+  same layer, exactly the composed half; the world frames' were all new (the crowd
+  animates, and its camera follows the game's). Each layer keeps the key of the drawing
+  that made it: the game's version and the game frame it drew it in (the same pair is the
+  same draws), the options (`draw_key`, which now also has textures, lighting, skinning,
+  blending, culling, self-shadow, the default material, hardware sampling and the shader
+  variants), and a hash of each draw's matrix as drawn (a VR eye's where it sees the draw:
+  `RePose`'s copy, or the override's swap), of the stamps of the target layers it samples
+  (every drawing a new stamp) and, for a pass that doesn't clear what this frame already drew
+  into it, of that. With its draws' geometry and textures held (`kind`, the same objects,
+  so their addresses can't be reused), a pass whose key is its layer's is counted
+  (`passes_repeated`) and not drawn. Never for a pass that reads the frame's own scene:
+  spotlight cones, soft particles, their targets' blurs, the composite's surfaces,
+  REFRACT_WORLD. VR's second eye drawn in one go marks what it draws again over the first's
+  (`redraw1`) as kept by no later frame, and the passes moved ahead of the world submit
+  after the last of them drawn. `capture` writes `<name>.gpu.unkept.png` (every pass drawn)
+  and `.gpu.kept.png` (at once again, keeping that), and with `vr` the eyes' `.gpu.L.kept.png`
+  and `.gpu.R.kept.png`: on 2026-10-22 four song captures (two with `vr_show_all`) and the
+  seventeen VR captures' eyes were the same, pixel for pixel, kept and drawn (and `vr_eyes`'
+  eyes the same as the build before's). The live view at 1600x900 with `vr_show_all`
+  (15 s each): post frames' passes 94.7 to 10.9 a frame (84.2 kept), their recording 2.2 to
+  0.8 ms and their passes' GPU 1.5 to 0.05 ms, frames 4.7 to 3.8 ms p50; as the game shows
+  it 7.7 of 18 kept, frames the same (1.4 ms).
 - `vr` (debug, off, restart; Windows): the native renderer's picture in a headset through
   OpenXR (`xr_present.h`). `openxr_loader.dll` is loaded at run time (the usual search path,
   else SteamVR's `bin\win64`), never linked, and only with `vr` on; the session is bound
@@ -469,7 +498,35 @@ What each does, how it was measured and why it defaults as it does. The
   (`out/vr/step5_crowd_cull.patch` in the VR worktree); and dropping bloom and glare
   from the eyes (`eye_cost`'s `frame.no_bloom`) saves 0.12-0.24 ms of GPU a frame at
   2644x2644 (post-processing 0.31-0.37 ms for both eyes, 0.18-0.20 without), too little
-  for the halos they give, so they stay. The overlay's draws (`soft_raster.h`'s `OnHud`, from
+  for the halos they give, so they stay.
+  What was left of the eyes' texture passes was the crowd's impostors, ~84-110 a frame from
+  a fixed viewpoint (one 256x512 target, a layer each since `native_view_hoist_passes`; two
+  draws and three mip passes each, the passes' cost mostly per pass): 1.4-1.9 ms of the
+  first eye's recording and 1.35-1.8 ms of its GPU at the Steam Frame's size. They can't be
+  drawn in fewer render passes: SDL_gpu's colour target is one layer of one level, so one
+  pass over every layer (or their mips at once) would need the crowd's pictures in one 2D
+  atlas and the cards' sampling remapped into its cells, the shader's own filtering kept
+  inside them. What changes is how often. With `native_keep_repeated_passes` (above) a
+  frame whose world is the last one's (under even/odd rendering every other frame at 144
+  Hz) or a capture the eyes draw again keeps every impostor; the world frames' are all new.
+  `vr_impostor_frames` (debug, 2; `RasterOptions::spread_passes`, set only for the eyes in
+  one go) draws them over that many frames: of a frame's passes into a renamed target
+  (PlanHoist's: only the crowd's), `gpu_view.h`'s `SpreadDraws` draws ceil(n / frames), first
+  those that can't wait, then the layers drawn longest ago, and the rest wait
+  (`passes_spread`): their layers keep a picture of the same kind (`LayerHeld::kind`, the
+  same draws' geometry and textures, eye-free, the same options) a frame or so older, never
+  more than frames - 1 running (`LayerHeld::waited`). At 2 every frame draws about half,
+  world frame or not: on a world frame the half drawn longest ago, on the composed frame
+  after it the half that waited, the other half kept; a crowd member's picture is then at
+  most one frame late (6.9 ms at 144 Hz, its world at 72 Hz under even/odd rendering), as if
+  its animation were a frame behind; the cards stay where they are. On the twelve captures
+  (2026-10-22, `eye_cost`'s `spread` and `repeat`, both eyes at 2115x2115, the nine with a
+  crowd): a frame the game has moved on in went from 3.7-4.9 ms of CPU and 2.7-4.5 of GPU
+  for both eyes to 2.8-4.2 and 2.0-3.5 (a mean 0.8 ms of each less: 50-69 passes of 92-124,
+  42-55 waiting), and at 3 to 2.7-3.0 and 1.7-3.2 for arena_04 and big_club_04 (0.8-1.5 and
+  0.9-1.3 less); the same capture again to 2.1-3.1 and 1.2-2.6 (6-14 passes). small_club_01
+  (no crowd target) and the window's captures the same as before.
+  The overlay's draws (`soft_raster.h`'s `OnHud`, from
   `vr_pose.h`'s `HudBoundary`: `post_boundary`, or 0 for a frame the eyes can't see) are
   drawn alone as the HUD panel (`BackBufferPart::kHud`): transparent black, alpha as
   coverage, premultiplied (`native_view_replay --overlay-only`, `--split-check`). Draws that
@@ -719,7 +776,13 @@ What each does, how it was measured and why it defaults as it does. The
   CPU ms (`eyes_ms`, `eyes_setup_ms`) and the panel's (`hud_ms`, `hud_setup_ms`, its
   `hud_size`). The rounds before it draw at one size throughout, so only `with_hud` shows
   what changing size between the eyes and the panel costs (`out/vr/vr_eyes_hud.b3t` and
-  `with_hud_table.py` in the VR worktree).
+  `with_hud_table.py` in the VR worktree). Those rounds keep nothing of the round before
+  (`keep_repeats` off), each a frame the game has moved on in, as before; `repeat` (both
+  eyes in one go, each eye's stats as `first` and `second`) is the same capture drawn again
+  after a fresh drawing (what `native_keep_repeated_passes` keeps), and `spread` every round
+  a frame the game has moved on in (`RasterOptions::repeats_stale`) with the crowd's
+  pictures drawn over `vr_impostor_frames` frames (its `frames`), from the second round on as
+  it stands once that's going.
   The 3D highway (`vr_track_3d`, on): in songs each eye draws the tracks from where it is,
   as an object in front of the head, in the default window and from `vr_anchor` alike.
   RB3 draws each track after post-processing with a camera of its own (z range 0..1),
@@ -834,9 +897,11 @@ What each does, how it was measured and why it defaults as it does. The
   time less the wake (with `XR_KHR_win32_convert_performance_counter_time`, which band3 asks
   for where the runtime has it), the capture drawn (its age since the game's Present, the
   game's frame time, whether it's the one the frame before drew, game frames skipped, those
-  published by Present), each eye's CPU, GPU (`native_gpu_timestamps`) and RePose ms, and the
+  published by Present), each eye's CPU, GPU (`native_gpu_timestamps`) and RePose ms, the
   window's picture (published after xrEndFrame, the left eye; the next xrWaitFrame waits on
-  it). The `xr` block's `late` is as before: WaitFrame's return (xrBeginFrame and
+  it), and last the texture passes the eyes drew and those they kept or left waiting
+  (`eye_passes`, `eye_passes_kept`: a world frame's from a composed one's). The `xr` block's
+  `late` is as before: WaitFrame's return (xrBeginFrame and
   xrLocateViews done) to xrEndFrame's return over the display period, the CPU's part of the
   frame without xrWaitFrame's wait; it doesn't say the runtime showed the frame late. Beside
   it: `missed` (the display time moved on 1.5 periods or more since the frame before's: the

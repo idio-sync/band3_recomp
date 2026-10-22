@@ -226,10 +226,13 @@ TEST_CASE("a throttled frame's two-refresh step is missed refreshes against the 
     Classify(t, &prev);
     CHECK_FALSE(t.missed);
     CHECK_FALSE(t.throttled);
-    // the CSV's last columns: the refresh, throttled, the queue wait
+    // the CSV's last columns: the refresh, throttled, the queue wait, the
+    // eyes' texture passes drawn and kept
     t.refresh_ns = kPeriodNs;
     t.queue_wait = true;
     t.done_wait_ms = 0.25;
+    t.eye_passes = 45;
+    t.eye_passes_kept = 44;
     Classify(t, &prev);
-    CHECK(Has(CsvRow(t), ",8.333,1,1,0.250\n"));
+    CHECK(Has(CsvRow(t), ",8.333,1,1,0.250,45,44\n"));
 }

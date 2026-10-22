@@ -212,3 +212,77 @@ TEST_CASE("VR's second eye keeps a pass's picture only where the first eye's is 
     // a layer the target doesn't have
     CHECK_FALSE(KeepsEyePass(false, true, 7, 7, layers, 4, 40));
 }
+
+TEST_CASE("a pass is kept where its layer holds the same drawing of it") {
+    RepeatKey key;
+    key.version = 7041;
+    key.from_frame = 2540;
+    key.draw_key = 0x3f;
+    key.inputs = 0x1234;
+    LayerHeld held;
+    held.valid = true;
+    held.key = key;
+    CHECK(KeepsRepeat(true, &held, key));
+    // the target forgotten or remade, the layer never drawn or drawn over
+    // by what can't be kept
+    CHECK_FALSE(KeepsRepeat(false, &held, key));
+    CHECK_FALSE(KeepsRepeat(true, nullptr, key));
+    held.valid = false;
+    CHECK_FALSE(KeepsRepeat(true, &held, key));
+    held.valid = true;
+    // another version, the same version from another game frame, other
+    // options, or other matrices or samples (an eye moved, a sampled layer
+    // drawn again)
+    for (int field = 0; field < 4; field++) {
+        RepeatKey other = key;
+        if (field == 0) other.version++;
+        if (field == 1) other.from_frame++;
+        if (field == 2) other.draw_key ^= 1;
+        if (field == 3) other.inputs ^= 1;
+        CHECK_FALSE(KeepsRepeat(true, &held, other));
+    }
+}
+
+TEST_CASE("the crowd's layers are drawn over the frames, the ones drawn longest ago first") {
+    // eight layers that may all wait, drawn at serials 10..17
+    std::vector<SpreadPass> passes(8);
+    for (uint32_t i = 0; i < 8; i++) passes[i] = {true, 10 + i};
+    // one frame draws every one
+    CHECK(SpreadDraws(passes, 8, 1) == std::vector<uint8_t>(8, 1));
+    CHECK(SpreadDraws(passes, 8, 0) == std::vector<uint8_t>(8, 1));
+    // over two, the half drawn longest ago
+    CHECK(SpreadDraws(passes, 8, 2) == std::vector<uint8_t>{1, 1, 1, 1, 0, 0, 0, 0});
+    // over three, ceil(8 / 3)
+    CHECK(SpreadDraws(passes, 8, 3) == std::vector<uint8_t>{1, 1, 1, 0, 0, 0, 0, 0});
+    // the budget counts the layers that hold their pass already (16 in all)
+    CHECK(SpreadDraws(passes, 16, 2) == std::vector<uint8_t>(8, 1));
+    // those that can't wait are drawn first, and count
+    passes[6].may_wait = false;
+    CHECK(SpreadDraws(passes, 8, 2) == std::vector<uint8_t>{1, 1, 1, 0, 0, 0, 1, 0});
+    // more that can't than the budget: all of those, none of the rest
+    for (uint32_t i = 3; i < 8; i++) passes[i].may_wait = false;
+    CHECK(SpreadDraws(passes, 8, 2) == std::vector<uint8_t>{0, 0, 0, 1, 1, 1, 1, 1});
+    // a tie in serial goes by order
+    std::vector<SpreadPass> tie(4, {true, 5});
+    CHECK(SpreadDraws(tie, 4, 2) == std::vector<uint8_t>{1, 1, 0, 0});
+}
+
+TEST_CASE("drawn over two frames, every layer is drawn every other frame") {
+    // the layers' serials as the frames go, each frame drawing what
+    // SpreadDraws says and the layers drawn taking the frame's serial
+    std::vector<SpreadPass> passes(6);
+    for (uint32_t i = 0; i < 6; i++) passes[i] = {true, 1};
+    std::vector<uint32_t> drawn(6, 0);
+    for (uint64_t frame = 2; frame < 12; frame++) {
+        const std::vector<uint8_t> draw = SpreadDraws(passes, 6, 2);
+        uint32_t count = 0;
+        for (uint32_t i = 0; i < 6; i++) {
+            if (!draw[i]) continue;
+            passes[i].serial = frame;
+            drawn[i]++;
+            count++;
+        }
+        CHECK(count == 3);
+    }
+    for (uint32_t n : drawn) CHECK(n == 5);
+}

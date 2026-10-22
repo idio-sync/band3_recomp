@@ -540,7 +540,8 @@ public:
             "\"uniform_slow_ms\":{:.3f},\"draw_slow_ms\":{:.3f},\"submits\":{:.0f},"
             "\"draws\":{:.0f},\"world_draws\":{:.0f},"
             "\"instanced_draws\":{:.0f},\"passes\":{:.0f},\"passes_kept\":{:.0f},"
-            "\"passes_shared\":{:.0f},\"passes_eye\":{:.0f},"
+            "\"passes_shared\":{:.0f},\"passes_eye\":{:.0f},\"passes_repeated\":{:.0f},"
+            "\"passes_spread\":{:.0f},"
             "\"gpu_ms\":{:.3f},\"gpu\":{{\"world\":{:.3f},\"pass_other\":{:.3f},"
             "\"pass_shadow\":{:.3f},\"pass_spot\":{:.3f},\"mips\":{:.3f},\"post\":{:.3f},"
             "\"overlay\":{:.3f},\"gamma\":{:.3f},\"upload\":{:.3f},\"idle\":{:.3f}}}}}",
@@ -562,7 +563,9 @@ public:
             mid([](const GpuStats& g) { return g.passes; }),
             mid([](const GpuStats& g) { return g.passes_kept; }),
             mid([](const GpuStats& g) { return g.passes_shared; }),
-            mid([](const GpuStats& g) { return g.passes_eye; }), total, gpu({t::kWorld}),
+            mid([](const GpuStats& g) { return g.passes_eye; }),
+            mid([](const GpuStats& g) { return g.passes_repeated; }),
+            mid([](const GpuStats& g) { return g.passes_spread; }), total, gpu({t::kWorld}),
             gpu({t::kPassOther}), gpu({t::kPassShadow}), gpu({t::kPassSpot, t::kPassBlur}),
             gpu({t::kMips}),
             gpu({t::kCopies, t::kVelocity, t::kDof, t::kBloom, t::kComposite}),
@@ -673,22 +676,32 @@ public:
             return true;
         };
         bool together = false;
-        {
+        // and with native_keep_repeated_passes, drawn at once again, keeping
+        // what the first drew (<name>.gpu.L.kept.png, .gpu.R.kept.png): the
+        // same pictures expected
+        for (int again = 0; again < (eo.keep_repeats ? 2 : 1); again++) {
             render::GpuStats gs[2];
             render::vr::EyeOverride ov[2];
-            together = both_eyes(eo, gs, ov, nullptr, false);
-            for (int e = 0; together && e < 2; e++) {
+            if (!both_eyes(eo, gs, ov, nullptr, false)) break;
+            together = true;
+            for (int e = 0; e < 2; e++) {
                 std::vector<uint32_t> eye_rgba;
                 uint32_t w = 0, h = 0;
+                const char* suffix = e ? (again ? ".gpu.R.kept.png" : ".gpu.R.png")
+                                       : (again ? ".gpu.L.kept.png" : ".gpu.L.png");
                 if (render::GpuRenderer::Get().DownloadOutput(render::GpuRenderer::EyeSlot(e),
                                                               eye_rgba, w, h))
                     render::WritePng((rex::filesystem::GetExecutableFolder() / "screenshots" /
-                                      (file + (e ? ".gpu.R.png" : ".gpu.L.png")))
+                                      (file + suffix))
                                          .string(),
                                      eye_rgba, w, h);
             }
         }
-        for (int e = 0; e < 2 && !together; e++) {
+        // (each eye twice over likewise: the eyes, then the eyes again)
+        const int one_by_one = eo.keep_repeats && !layout.eyes_black ? 4 : 2;
+        for (int k = 0; k < one_by_one && !together; k++) {
+            const int e = k & 1;
+            const bool again = k >= 2;
             std::vector<uint32_t> eye_rgba;
             render::GpuStats eye_stats;
             bool drew = layout.eyes_black;
@@ -713,9 +726,11 @@ public:
                 drew = render::GpuRenderer::Get().RenderFrame(
                     eye_o.eye_override ? frame : eye_frame, eye_o, eye_rgba, eye_stats);
             }
+            const char* suffix = e ? (again ? ".gpu.R.kept.png" : ".gpu.R.png")
+                                   : (again ? ".gpu.L.kept.png" : ".gpu.L.png");
             if (drew)
                 render::WritePng((rex::filesystem::GetExecutableFolder() / "screenshots" /
-                                  (file + (e ? ".gpu.R.png" : ".gpu.L.png")))
+                                  (file + suffix))
                                      .string(),
                                  eye_rgba, eo.width, eo.height);
         }
@@ -799,6 +814,10 @@ public:
                 for (int z = 0; z < 2; z++) {
                     render::RasterOptions timed = eo;
                     timed.gpu_timestamps = true;
+                    // each round a frame the game has moved on in, as
+                    // before: what it keeps of the round before
+                    // (keep_repeats) is `repeat`'s, below
+                    timed.keep_repeats = false;
                     if (z) {
                         timed.width = timed.height = render::vr::EyeDrawSize(kFrameEye, eye_scale);
                         render::ScaleForPicture(timed);
@@ -926,13 +945,54 @@ public:
                                 ",\"no_bloom\":{{\"gpu_ms\":{:.3f},\"post\":{:.3f}}}",
                                 Mid(gpu[0], gpu[1], gpu[2]), Mid(post[0], post[1], post[2]));
                     }
+                    // Both eyes in one go as VrFrame draws them in two more
+                    // ways (medians of three after one, each eye's stats as
+                    // `first` and `second`): `repeat`, the same capture
+                    // again (keep_repeats: a frame whose world is the last
+                    // one's, a capture the game hasn't moved on from); and
+                    // `spread`, every round a frame the game has moved on
+                    // in (repeats_stale) with the crowd's pictures drawn
+                    // over vr_impostor_frames frames (spread_passes): a
+                    // frame's share, from the second round on as it stands
+                    // once that's going
+                    std::string kept;
+                    if (together) {
+                        const uint32_t frames =
+                            uint32_t(std::max(REXCVAR_GET(vr_impostor_frames), 1));
+                        for (int way = 0; way < 2; way++) {
+                            render::RasterOptions ko = timed;
+                            ko.keep_repeats = true;
+                            ko.repeats_stale = way == 1;
+                            ko.spread_passes = way == 1 ? frames : 0;
+                            render::GpuStats got[2][3];
+                            bool measured = true;
+                            for (int round = 0; round < 4 && measured; round++) {
+                                render::GpuStats pair[2];
+                                render::vr::EyeOverride ov[2];
+                                // `repeat` draws each round's capture once
+                                // afresh first
+                                if (way == 0)
+                                    measured = both_eyes(timed, pair, ov, nullptr, true);
+                                measured =
+                                    measured && both_eyes(ko, pair, ov, nullptr, true);
+                                if (!measured || round == 0) continue;
+                                got[0][round - 1] = std::move(pair[0]);
+                                got[1][round - 1] = std::move(pair[1]);
+                            }
+                            if (measured)
+                                kept += std::format(
+                                    ",\"{}\":{{\"frames\":{},\"first\":{},\"second\":{}}}",
+                                    way ? "spread" : "repeat", way ? frames : 0,
+                                    EyeStatsJson(got[0]), EyeStatsJson(got[1]));
+                        }
+                    }
                     sizes[z] = std::format(
                         "\"size\":[{},{}],\"together\":{},\"repose_ms\":{:.3f},\"first\":{},"
                         "\"second\":{}",
                         timed.width, timed.height, together ? "true" : "false",
                         Mid(repose[0], repose[1], repose[2]), EyeStatsJson(first),
                         EyeStatsJson(second));
-                    sizes[z] += no_bloom + with_hud;
+                    sizes[z] += no_bloom + with_hud + kept;
                     // as before: the first picture's CPU and GPU at the eyes' size
                     if (!z)
                         sizes[z] += std::format(
@@ -1148,6 +1208,9 @@ public:
         // own frames do, so the CPU's drawing of the capture, which draws
         // them all, checks what was kept
         options.keep_carried = REXCVAR_GET(native_keep_carried_passes);
+        // and what they drew of this frame already (the live picture's, the
+        // capture's own variants after the first)
+        options.keep_repeats = REXCVAR_GET(native_keep_repeated_passes);
         return options;
     }
 
@@ -1162,6 +1225,23 @@ public:
             return;
         }
         out.gpu_path = path.string();
+        // and with native_keep_repeated_passes on, drawn again with every
+        // texture pass drawn (<name>.gpu.unkept.png), then at once again
+        // keeping what that drew (.gpu.kept.png): the same picture as each
+        // other and as .gpu.png (which may keep the live picture's) expected
+        if (options.keep_repeats) {
+            for (const bool keep : {false, true}) {
+                render::RasterOptions ko = options;
+                ko.keep_repeats = keep;
+                std::vector<uint32_t> px;
+                render::GpuStats ks;
+                if (render::GpuRenderer::Get().RenderFrame(frame, ko, px, ks))
+                    render::WritePng((rex::filesystem::GetExecutableFolder() / "screenshots" /
+                                      (file + (keep ? ".gpu.kept.png" : ".gpu.unkept.png")))
+                                         .string(),
+                                     px, options.width, options.height);
+            }
+        }
         // with `vr` on, the frame from each eye as the headset's are drawn
         // (native_view.cpp's VrFrame): xr::LayoutFor of this capture with the
         // last VR frame's views, or without a session a stand-in head at
@@ -1937,6 +2017,8 @@ private:
                       {"ahead_fallback_passes", double(g.ahead_fallback_passes)},
                       {"passes", double(g.passes)},
                       {"passes_kept", double(g.passes_kept)},
+                      {"passes_repeated", double(g.passes_repeated)},
+                      {"passes_spread", double(g.passes_spread)},
                       {"passes_hoisted", double(g.passes_hoisted)},
                       {"rt_layers", double(g.rt_layers)},
                       {"rt_layers_mb", g.rt_layers_mb},

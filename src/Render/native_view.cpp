@@ -219,6 +219,8 @@ void AddGpu(GpuStats& sum, const GpuStats& g) {
     sum.uploads += g.uploads;
     sum.passes += g.passes;
     sum.passes_kept += g.passes_kept;
+    sum.passes_repeated += g.passes_repeated;
+    sum.passes_spread += g.passes_spread;
     sum.passes_hoisted += g.passes_hoisted;
     sum.rt_layers += g.rt_layers;
     sum.rt_layers_mb += g.rt_layers_mb;
@@ -1019,6 +1021,7 @@ class Renderer {
                 // and k_8's (movie planes) as R8
                 o.r8_textures = REXCVAR_GET(native_r8_textures);
                 o.keep_carried = REXCVAR_GET(native_keep_carried_passes);
+                o.keep_repeats = REXCVAR_GET(native_keep_repeated_passes);
                 gpu = gpu_;
                 dump = dump_path_;
                 zero_copy = present_ && present_zero_copy_ && gpu && dump.empty();
@@ -1508,7 +1511,12 @@ class Renderer {
                 const vr::EyeOverride* const ov[2] = {&vr_override_[0], &vr_override_[1]};
                 GpuOutput out[2];
                 GpuStats gs[2];
-                together = GpuRenderer::Get().RenderEyesToOutputs(*cap, eo, ov, slot, out, gs);
+                // the crowd's pictures redrawn over vr_impostor_frames
+                // frames (RasterOptions::spread_passes): only here, where
+                // both eyes share them
+                RasterOptions both_o = eo;
+                both_o.spread_passes = uint32_t(std::max(REXCVAR_GET(vr_impostor_frames), 1));
+                together = GpuRenderer::Get().RenderEyesToOutputs(*cap, both_o, ov, slot, out, gs);
                 for (int e = 0; together && e < 2; e++) {
                     eye[e] = layout.eyes[e];
                     eye_cap[e] = cap;
@@ -1541,10 +1549,9 @@ class Renderer {
             }
             repose_ms[e] =
                 std::chrono::duration<double, std::milli>(Clock::now() - repose_start).count();
-            if (e == 1 && shared && d[0].drew_output) {
-                eye_o.keep_eye_passes = true;
-                eye_o.eye_view_proj = moved;
-            }
+            // (and the left's, which keep_repeats reads)
+            eye_o.eye_view_proj = moved;
+            if (e == 1 && shared && d[0].drew_output) eye_o.keep_eye_passes = true;
             d[e].drew_output = GpuRenderer::Get().RenderFrameToOutput(*eye_cap[e], eye_o, slot[e],
                                                                       d[e].out, d[e].gs);
             if (d[e].drew_output) t.eye_submitted_ms[e] = at();
@@ -1719,6 +1726,8 @@ class Renderer {
             t.eye_cpu_ms[e] = d[e].gs.ms;
             t.eye_gpu_ms[e] = gpu_ms;
             t.repose_ms[e] = repose_ms[e];
+            t.eye_passes += d[e].gs.passes;
+            t.eye_passes_kept += d[e].gs.passes_repeated + d[e].gs.passes_spread;
         }
         if (hd.drew_output) {
             t.hud_cpu_ms = hd.gs.ms;

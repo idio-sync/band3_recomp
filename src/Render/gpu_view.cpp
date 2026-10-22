@@ -885,6 +885,9 @@ struct GpuRenderer::Impl {
         // the version each layer holds, for keep_eye_passes (a renamed
         // target's passes draw one each); empty until drawn
         std::vector<uint32_t> layer_version;
+        // what each layer holds, for keep_repeats and spread_passes
+        // (gpu_view.h's LayerHeld); empty until drawn
+        std::vector<LayerHeld> held;
         // the options it was drawn with (Render's draw_key), for keep_carried
         uint64_t drawn_key = 0;
         // the frame that last drew or sampled it, and when (frame_now)
@@ -892,6 +895,8 @@ struct GpuRenderer::Impl {
         std::chrono::steady_clock::time_point used_at;
     };
     std::unordered_map<uint32_t, Rt> rts;
+    // the last LayerHeld::stamp given
+    uint64_t held_stamp = 0;
     bool rt_failure_logged = false;
     // the depth textures targets without depth share, by size (w << 32 | h),
     // and how many targets hold each; let go with the last
@@ -2584,6 +2589,7 @@ void GpuRenderer::Impl::ReleaseRt(Rt& rt) {
     rt.premade = false;
     rt.drawn = false;
     rt.layer_version.clear();
+    rt.held.clear();
 }
 
 bool GpuRenderer::Impl::Premake(const RasterOptions& o) {
@@ -3966,12 +3972,147 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
         }
     };
     // what a texture pass's pixels depend on besides its content and size,
-    // for keep_carried: a target drawn with other options is drawn again
-    const uint64_t draw_key = (uint64_t(o.filtering) << 0) | (uint64_t(o.normal_maps) << 1) |
-                              (uint64_t(o.rt_guest_pixels) << 2) | (uint64_t(o.bc_textures) << 3) |
-                              (uint64_t(o.r8_textures) << 4) | (uint64_t(o.texture_passes) << 5) |
-                              (uint64_t(o.msaa & 0xff) << 8) | (uint64_t(int(o.view) & 0xff) << 16) |
-                              (uint64_t(std::bit_cast<uint32_t>(o.shadow_scale)) << 32);
+    // for keep_carried and keep_repeats: a target drawn with other options is
+    // drawn again
+    const uint64_t draw_key =
+        (uint64_t(o.filtering) << 0) | (uint64_t(o.normal_maps) << 1) |
+        (uint64_t(o.rt_guest_pixels) << 2) | (uint64_t(o.bc_textures) << 3) |
+        (uint64_t(o.r8_textures) << 4) | (uint64_t(o.texture_passes) << 5) |
+        (uint64_t(o.hardware_sampling) << 6) | (uint64_t(o.shader_variants) << 7) |
+        (uint64_t(o.msaa & 0xff) << 8) | (uint64_t(int(o.view) & 0xff) << 16) |
+        (uint64_t(o.textures) << 24) | (uint64_t(o.lighting) << 25) |
+        (uint64_t(o.legacy_light) << 26) | (uint64_t(o.skinning) << 27) |
+        (uint64_t(o.blending) << 28) | (uint64_t(o.culling) << 29) |
+        (uint64_t(o.self_shadow) << 30) | (uint64_t(o.default_material) << 31) |
+        (uint64_t(std::bit_cast<uint32_t>(o.shadow_scale)) << 32);
+    // RasterOptions::keep_repeats and spread_passes (gpu_view.h's RepeatKey,
+    // LayerHeld, SpreadDraws). A pass is never kept that reads what the frame
+    // draws besides other passes' targets: the scene's depth (spotlight
+    // cones, soft particles; their targets' blurs and the composite's
+    // surfaces with them) or the world behind (REFRACT_WORLD)
+    std::vector<int8_t> repeatable(runs.size(), -1);
+    auto can_repeat = [&](size_t r) {
+        if (repeatable[r] >= 0) return repeatable[r] != 0;
+        const PassRun& run = runs[r];
+        const Pass& p = *run.pass;
+        bool ok = p.tex_type != kTexTypeDepthVolume && p.tex_type != kTexTypeDensityMap &&
+                  p.tex_obj != frame.post_consts.soft_surface[0] &&
+                  p.tex_obj != frame.post_consts.soft_surface[1];
+        for (size_t d = run.first; d < run.end && ok; d++) {
+            const DrawItem& it = frame.draws[d];
+            if (!DrawnIn(run, frame, it, o)) continue;
+            const ShadeState* state = shade::ShadeOf(frame, it);
+            ok = !spot::SpotBlur(it, state, p) && !IsSpotCone(it, state) &&
+                 !SoftBlur(frame, it, state, p) && !IsSoftParticle(it, state) &&
+                 !RefractsWorld(state);
+        }
+        repeatable[r] = ok ? 1 : 0;
+        return ok;
+    };
+    // a draw a VR eye sees: its matrix the one the eye moves (as the frame
+    // drawn has it, or the override's)
+    bool eye_matrix = false;
+    for (const auto& row : o.eye_view_proj.m)
+        for (float v : row) eye_matrix |= v != 0.0f;
+    auto seen_by_eye = [&](const DrawItem& it) {
+        return (eye_matrix && std::memcmp(&it.view_proj, &o.eye_view_proj, sizeof(Mat4)) == 0) ||
+               (ov && ov->ok && std::memcmp(&it.view_proj, &ov->swap[0].from, sizeof(Mat4)) == 0);
+    };
+    // A pass's RepeatKey into `target`'s `layer`, and whether its picture
+    // depends on an eye; `loads`: it starts from the layer's picture
+    auto repeat_key = [&](const PassRun& run, const Rt& target, uint32_t layer, bool loads,
+                          bool& eye) {
+        RepeatKey k;
+        k.version = run.pass->version;
+        k.from_frame = run.pass->from_frame;
+        k.draw_key = draw_key;
+        uint64_t h = 0xcbf29ce484222325ull;
+        auto mix = [&](uint64_t v) {
+            h = (h ^ v) * 0x100000001b3ull;
+            h ^= h >> 31;
+        };
+        // a target it samples: its layer's stamp (0 undrawn), and its eye
+        auto sampled = [&](const Texture* t, bool diffuse) {
+            if (!t || !t->tex_obj || t->tex_obj == run.pass->tex_obj) return;
+            const auto f = rts.find(t->tex_obj);
+            const uint32_t l = diffuse ? hoist.LayerOf(t->tex_obj, t->version) : 0;
+            const LayerHeld* s = f != rts.end() && f->second.drawn && l < f->second.held.size()
+                                     ? &f->second.held[l]
+                                     : nullptr;
+            mix(t->tex_obj);
+            mix(s ? s->stamp : 0);
+            if (s && s->eye) eye = true;
+        };
+        eye = false;
+        for (size_t d = run.first; d < run.end; d++) {
+            const DrawItem& it = frame.draws[d];
+            if (!DrawnIn(run, frame, it, o)) continue;
+            const bool seen = seen_by_eye(it);
+            eye |= seen;
+            const Mat4& m = seen && ov && ov->ok ? ov->swap[0].to : it.view_proj;
+            uint32_t words[16];
+            std::memcpy(words, &m, sizeof(words));
+            for (uint32_t w : words) mix(w);
+            const ShadeState* state = shade::ShadeOf(frame, it);
+            if (it.tex && IsPassTarget(it.tex.get())) sampled(it.tex.get(), SamplesDiffuse(it));
+            sampled(ProjectedTargetOf(state), false);
+            sampled(ShadowMapOf(state), false);
+            sampled(MapTargetOf(state, kMapNormal), false);
+            sampled(MapTargetOf(state, kMapDetailNormal), false);
+        }
+        if (loads) mix(layer < target.held.size() ? target.held[layer].stamp : 0);
+        k.inputs = h;
+        return k;
+    };
+    // whether `held`'s picture was drawn from the run's draws' geometry and
+    // textures, in order
+    auto same_kind = [&](const PassRun& run, const LayerHeld& held) {
+        size_t k = 0;
+        for (size_t d = run.first; d < run.end; d++) {
+            const DrawItem& it = frame.draws[d];
+            if (!DrawnIn(run, frame, it, o)) continue;
+            if (k + 2 > held.kind.size() || held.kind[k].get() != it.geom.get() ||
+                held.kind[k + 1].get() != it.tex.get())
+                return false;
+            k += 2;
+        }
+        return k == held.kind.size();
+    };
+    // per run: the key it's drawn with, its eye, and whether it waits
+    // (spread_passes: its layer left with an older picture for now)
+    std::vector<RepeatKey> run_key(runs.size());
+    std::vector<uint8_t> run_eye(runs.size(), 0), run_wait(runs.size(), 0);
+    // spread_passes: which of the renamed targets' passes their layers don't
+    // hold wait this frame, decided before any is drawn (renamed targets'
+    // passes all clear, so none starts from what an earlier one drew)
+    if (o.spread_passes > 1 && !hoist.layers.empty()) {
+        std::vector<SpreadPass> spread;
+        std::vector<size_t> spread_run;
+        uint32_t total = 0;
+        for (size_t r = 0; r < runs.size(); r++) {
+            const PassRun& run = runs[r];
+            if (!run.pass || !hoist.layers.count(run.pass->tex_obj) || !can_repeat(r)) continue;
+            if (ahead_pass && run.first >= frame.post_boundary) continue;
+            total++;
+            const auto f = rts.find(run.pass->tex_obj);
+            const Rt* t = f != rts.end() && f->second.drawn ? &f->second : nullptr;
+            const uint32_t layer = run_layer[r];
+            const LayerHeld* held = t && layer < t->held.size() ? &t->held[layer] : nullptr;
+            bool eye = false;
+            const RepeatKey key = t ? repeat_key(run, *t, layer, false, eye) : RepeatKey{};
+            const bool kind = held && held->valid && same_kind(run, *held);
+            if (t && kind && o.keep_repeats && !o.repeats_stale && KeepsRepeat(true, held, key))
+                continue;
+            SpreadPass p;
+            p.may_wait = kind && !eye && !held->eye && held->key.draw_key == draw_key &&
+                         held->waited + 1 < o.spread_passes;
+            p.serial = held ? held->serial : 0;
+            spread.push_back(p);
+            spread_run.push_back(r);
+        }
+        const std::vector<uint8_t> draw = SpreadDraws(spread, total, o.spread_passes);
+        for (size_t i = 0; i < draw.size(); i++) run_wait[spread_run[i]] = !draw[i];
+    }
     for (size_t r = 0; r < runs.size(); r++) {
         const PassRun& run = runs[r];
         // a texture pass's target, cleared where its camera (or NgLight)
@@ -4033,6 +4174,37 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
             }
             const bool fresh = !target->drawn || target->drawn_in != serial;
             const uint32_t clear = PassClearFlags(frame, *run.pass);
+            // RasterOptions::keep_repeats: its layer holds what it would draw
+            // (KeepsRepeat, of the same geometry and textures); spread_passes:
+            // it waits, its layer holding an older picture of its kind. The
+            // key and eye go with the picture drawn (LayerHeld)
+            const uint32_t layer = target->shadow ? 0 : run_layer[r];
+            {
+                const bool no_z = (run.pass->tex_type & kTexTypeNoZ) != 0;
+                const bool loads = !fresh && (!(clear & 0x0f) || (!no_z && !(clear & 0x30)));
+                bool eye = false;
+                run_key[r] = repeat_key(run, *target, layer, loads, eye);
+                run_eye[r] = eye;
+            }
+            if (can_repeat(r)) {
+                LayerHeld* held = layer < target->held.size() ? &target->held[layer] : nullptr;
+                const bool kind = held && held->valid && same_kind(run, *held);
+                const bool repeat = o.keep_repeats && !o.repeats_stale && kind &&
+                                    KeepsRepeat(target->drawn, held, run_key[r]);
+                if (repeat || (run_wait[r] && kind && target->drawn)) {
+                    target->drawn_in = serial;
+                    target->version = run.pass->version;
+                    UseRt(*target);
+                    if (repeat) {
+                        held->waited = 0;
+                        st.passes_repeated++;
+                    } else {
+                        held->waited++;
+                        st.passes_spread++;
+                    }
+                    continue;
+                }
+            }
             run_clear[r] = kRunDrawn;
             if ((clear & 0x0f) || fresh) run_clear[r] |= kRunClearColor;
             if ((clear & 0x30) || fresh) run_clear[r] |= kRunClearDepth;
@@ -4224,6 +4396,25 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
                 target->layer_version.assign(target->layers, 0);
             const uint32_t layer = target->shadow ? 0 : run_layer[r];
             if (layer < target->layers) target->layer_version[layer] = run.pass->version;
+            // what the layer holds now (LayerHeld): every drawing a new
+            // stamp, a key only where it may be kept (can_repeat)
+            if (target->held.size() != target->layers) target->held.resize(target->layers);
+            if (layer < target->layers) {
+                LayerHeld& h = target->held[layer];
+                h.valid = can_repeat(r);
+                h.key = run_key[r];
+                h.serial = serial;
+                h.stamp = ++held_stamp;
+                h.eye = run_eye[r] != 0;
+                h.waited = 0;
+                h.kind.clear();
+                for (size_t d = run.first; d < run.end; d++) {
+                    const DrawItem& it = frame.draws[d];
+                    if (!DrawnIn(run, frame, it, o)) continue;
+                    h.kind.push_back(it.geom);
+                    h.kind.push_back(it.tex);
+                }
+            }
         }
     }
     // RenderEyes' second view, from this plan: its own instance worlds and
@@ -4308,6 +4499,24 @@ bool GpuRenderer::Impl::Render(const FrameCapture& frame, const RasterOptions& o
                 changed = true;
             }
         }
+        // which it draws over the first's pictures: theirs are the second
+        // eye's, kept by no later frame (LayerHeld)
+        for (size_t r = 0; r < runs.size(); r++) {
+            if (!redraw1[r]) continue;
+            Rt& t = rts[runs[r].pass->tex_obj];
+            const uint32_t layer = t.shadow ? 0 : run_layer[r];
+            if (layer >= t.held.size()) continue;
+            t.held[layer].valid = false;
+            t.held[layer].eye = true;
+            t.held[layer].stamp = ++held_stamp;
+        }
+    }
+    // the passes moved ahead of the world submit after the last of them
+    // drawn: kept ones (keep_repeats, spread_passes) aren't
+    if (last_hoisted_run != SIZE_MAX) {
+        last_hoisted_run = SIZE_MAX;
+        for (size_t r = 0; r < runs.size(); r++)
+            if (run_hoisted[r] && (run_clear[r] & kRunDrawn)) last_hoisted_run = r;
     }
     // the composite's noise map
     if (o.post && o.view == RasterView::kFinal && frame.noise_map) UseTexture(frame.noise_map);
@@ -6070,6 +6279,7 @@ void GpuRenderer::Impl::Evict() {
         if (rt.drawn || rt.drawn_in) {
             rt.drawn = false;
             rt.drawn_in = 0;
+            rt.held.clear();
             counts.evicted_rts++;
         }
         if (keep == RtResidency::kForget) {

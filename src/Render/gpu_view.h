@@ -97,6 +97,10 @@ struct GpuStats {
     // (RasterOptions::keep_eye_passes), and those it drew itself because one
     // of their draws is seen through its own camera
     uint32_t passes_shared = 0, passes_eye = 0;
+    // texture passes left undrawn, their target layers holding what they'd
+    // draw (RasterOptions::keep_repeats), and those left with an older
+    // picture of theirs for now (spread_passes)
+    uint32_t passes_repeated = 0, passes_spread = 0;
     // RasterOptions::hoist_passes (PlanHoist): passes moved ahead of the
     // world, and the layers this frame's renamed targets draw; after the
     // frame, MB of targets' layers past their first (mips a third more)
@@ -459,6 +463,81 @@ inline bool KeepsEyePass(bool sees_eye, bool drawn, uint64_t drawn_key, uint64_t
                          uint32_t version) {
     return !sees_eye && drawn && drawn_key == draw_key && layer < layer_version.size() &&
            layer_version[layer] == version;
+}
+
+// RasterOptions::keep_repeats: what a texture pass's drawing depends on. The
+// game's version of its target and the game frame it drew it in (the same
+// pair is the same draws: a composed frame's world is its world frame's, a VR
+// eye's copy of a capture moves only what the eye sees), the options it's
+// drawn with (Render's draw_key), and `inputs`, a hash of the rest: each
+// draw's matrix as drawn (a VR eye's where it sees the draw), the stamps of
+// the target layers it samples and, where it doesn't clear its own, of that.
+struct RepeatKey {
+    uint32_t version = 0;
+    uint64_t from_frame = 0;
+    uint64_t draw_key = 0;
+    uint64_t inputs = 0;
+    bool operator==(const RepeatKey&) const = default;
+};
+
+// What a texture pass's target layer holds: the key of the drawing that made
+// it (`valid` until another drawing or the target's remaking), the frame
+// serial that drew it, a stamp no other drawing has (what passes sampling it
+// key on), whether its picture depends on a VR eye (a draw the eye sees, or a
+// layer like that sampled), how many frames running it's been left older
+// than its pass (spread_passes), and the draws' geometry and textures in
+// order (`kind`, held so their addresses aren't reused): what a picture left
+// standing for a newer one of its pass must share.
+struct LayerHeld {
+    bool valid = false;
+    RepeatKey key;
+    uint64_t serial = 0, stamp = 0;
+    bool eye = false;
+    uint32_t waited = 0;
+    std::vector<std::shared_ptr<const void>> kind;
+};
+
+// RasterOptions::keep_repeats: whether a pass's target layer holds what the
+// pass would draw, so it needn't be drawn: the target drawn (not forgotten
+// or remade since) and the layer's drawing's key the pass's own
+inline bool KeepsRepeat(bool drawn, const LayerHeld* held, const RepeatKey& key) {
+    return drawn && held && held->valid && held->key == key;
+}
+
+// RasterOptions::spread_passes: a pass into a renamed target (the crowd's
+// impostors) its layer doesn't hold, and whether it may wait, its layer left
+// with an older picture of its kind for now (`may_wait`: nothing it draws
+// is seen by an eye, the layer's picture is of the same draws, eye-free,
+// drawn with the same options, and has waited fewer than frames - 1 frames
+// running); `serial`, when the layer was drawn.
+struct SpreadPass {
+    bool may_wait = false;
+    uint64_t serial = 0;
+};
+// Which of `passes` to draw this frame (1) and which wait (0), of `total`
+// passes into renamed targets (those the layers already hold included):
+// ceil(total / frames) are drawn, those that can't wait first, then the
+// layers drawn longest ago (by serial, then order); the rest wait, past that
+// if they can't. With every picture changing each frame, each layer is
+// drawn every `frames` frames, and none waits more than frames - 1 running.
+inline std::vector<uint8_t> SpreadDraws(const std::vector<SpreadPass>& passes, uint32_t total,
+                                        uint32_t frames) {
+    std::vector<uint8_t> draw(passes.size(), 1);
+    if (frames <= 1) return draw;
+    const uint32_t budget = (total + frames - 1) / frames;
+    uint32_t drawn = 0;
+    std::vector<uint32_t> waiting;
+    for (uint32_t i = 0; i < uint32_t(passes.size()); i++) {
+        if (passes[i].may_wait) waiting.push_back(i);
+        else drawn++;
+    }
+    std::stable_sort(waiting.begin(), waiting.end(),
+                     [&](uint32_t a, uint32_t b) { return passes[a].serial < passes[b].serial; });
+    for (uint32_t i : waiting) {
+        if (drawn < budget) drawn++;
+        else draw[i] = 0;
+    }
+    return draw;
 }
 
 // mesh.hlsl's VertexUniforms::instancing: x on, y the first world's index in
