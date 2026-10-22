@@ -7,12 +7,15 @@ Playable, still a work in progress.
 ![A full band playing 20th Century Boy at 1080p on the native renderer: guitar, drums and keys highways below the vocal harmonies, the drummer behind them](docs/images/gameplay.jpg)
 
 This is a fork of [ihatecompvir/band3_recomp](https://github.com/ihatecompvir/band3_recomp).
-Everything it adds was written with the help of AI, which did the vast majority of the
-work. I wanted something I could keep on my Steam Deck/laptop so I didn't have to lug my
-360 to parties anymore. There are other recomp projects that have not utilized AI as much
-as this one has, if you'd rather go with one of those. This one was put together by me with
-features I wanted to see and use, for my personal use. If you like it, awesome. If not, I
-get it and don't blame you at all. Either way, rock on.
+Claude/Qwen3.8-27B has created the vast majority of repo specific code here. I wanted to have
+something I could keep on my Steam Deck/laptop so I didn't have to lug my 360 to parties
+anymore. There are other recomp projects that have not utilized AI as much as this one 
+has, if you'd rather go with one of those. This one was put together by me with features 
+I wanted to see and use, for my personal use. If you like it, awesome. If not, I get it 
+and don't blame you at all. Either way, rock on.
+
+This project heavily builds on the work done by the Rock Band/Harmonix community, and 
+would not have been possible without the countless hours of work done by others. 
 
 You need your own copy of the game; no game files are included. RB3 Deluxe is highly recommended.
 
