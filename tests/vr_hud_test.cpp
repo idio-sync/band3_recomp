@@ -228,44 +228,62 @@ TEST_CASE("a song's HUD in pieces, the tracks' draws not; a menu or a fade keeps
     CHECK_FALSE(vr::HudPiecesOf(f, all).split);
 }
 
-TEST_CASE("the pieces held through a song: grown, never shrunk, hung where first seen") {
+TEST_CASE("the pieces held through a song: settled, then grown at once and let go of slowly") {
     vr::HudPieceHold hold;
-    FrameCapture f = HudFrame({kMeter, kScoreBox, kLyrics});
-    vr::HudPieces held = hold.Hold(vr::HudPiecesOf(f, SongPanel(f)));
+    auto pieces = [](std::vector<vr::PictureRect> cards, bool pause = false) {
+        const FrameCapture f = HudFrame(cards, 0, pause);
+        return vr::HudPiecesOf(f, SongPanel(f));
+    };
+    const int top = int(vr::HudPiece::kTop), meter = int(vr::HudPiece::kMeter);
+    // coming in: the meter growing into place, taken as each frame has it
+    const vr::PictureRect half{0.040f, 0.502f, 0.065f, 0.693f};
+    uint32_t grew = 0;
+    vr::HudPieces held = hold.Hold(pieces({half, kScoreBox, kLyrics}), 0, &grew);
     REQUIRE(held.split);
+    CheckRect(held.rect[meter], Padded(half));
+    held = hold.Hold(pieces({kMeter, kScoreBox, kLyrics}), 1);
+    CheckRect(held.rect[meter], Padded(kMeter));
+    CHECK(grew == 0);
+    // settled 2 s on: hung by where it is then
+    held = hold.Hold(pieces({kMeter, kScoreBox, kLyrics}), 2.5, &grew);
     const float lyrics_bottom = Padded(kLyrics).v1;
-    CHECK(held.anchor[2][1] == doctest::Approx(lyrics_bottom));
+    CHECK(held.anchor[top][1] == doctest::Approx(lyrics_bottom));
+    CHECK(held.anchor[meter][1] == doctest::Approx(Padded(kMeter).v1));
+    CHECK(grew == 0);
     // a shorter line, the title, then a Unison Bonus under the lyrics: the
-    // top grows, still hung by the lyrics' bottom
+    // top grows at once, still hung by the lyrics' bottom
     const vr::PictureRect short_line{0.49f, 0.106f, 0.51f, 0.138f};
-    f = HudFrame({kMeter, kScoreBox, short_line, kTitle, kUnison});
-    held = hold.Hold(vr::HudPiecesOf(f, SongPanel(f)));
-    CheckRect(held.rect[int(vr::HudPiece::kTop)],
-              Padded(vr::Union(kLyrics, vr::Union(kTitle, kUnison))));
-    CHECK(held.anchor[2][1] == doctest::Approx(lyrics_bottom));
-    // and stays so when they've gone
-    f = HudFrame({kMeter, kScoreBox, short_line});
-    held = hold.Hold(vr::HudPiecesOf(f, SongPanel(f)));
-    CheckRect(held.rect[int(vr::HudPiece::kTop)],
-              Padded(vr::Union(kLyrics, vr::Union(kTitle, kUnison))));
+    held = hold.Hold(pieces({kMeter, kScoreBox, short_line, kTitle, kUnison}), 3, &grew);
+    const vr::PictureRect grown = Padded(vr::Union(kLyrics, vr::Union(kTitle, kUnison)));
+    CheckRect(held.rect[top], grown);
+    CHECK(grew == 1u << top);
+    CHECK(held.anchor[top][1] == doctest::Approx(lyrics_bottom));
+    // kept while they're gone, for 4 to 8 s
+    held = hold.Hold(pieces({kMeter, kScoreBox, short_line}), 7, &grew);
+    CheckRect(held.rect[top], grown);
+    CHECK(grew == 0);
     // the pause menu: the pieces as they were for a frame or two, then whole
-    f = HudFrame({kMeter, kScoreBox, kLyrics}, 0, true);
-    const vr::HudPieces paused = vr::HudPiecesOf(f, SongPanel(f));
+    const vr::HudPieces paused = pieces({kMeter, kScoreBox, kLyrics}, true);
     REQUIRE_FALSE(paused.split);
-    for (int i = 1; i < vr::kHudWholeAfter; i++) CHECK(hold.Hold(paused).split);
-    CHECK_FALSE(hold.Hold(paused).split);
-    CHECK_FALSE(hold.Hold(paused).split);
+    for (int i = 1; i < vr::kHudWholeAfter; i++) CHECK(hold.Hold(paused, 7.1).split);
+    CHECK_FALSE(hold.Hold(paused, 7.2).split);
+    CHECK_FALSE(hold.Hold(paused, 7.3).split);
     // back: the pieces as before, the menu's not among them
-    f = HudFrame({kMeter, kScoreBox, kLyrics});
-    held = hold.Hold(vr::HudPiecesOf(f, SongPanel(f)));
+    held = hold.Hold(pieces({kMeter, kScoreBox, short_line}), 8);
     CHECK(held.split);
     CHECK(held.rect[int(vr::HudPiece::kRest)].Empty());
-    CheckRect(held.rect[int(vr::HudPiece::kTop)],
-              Padded(vr::Union(kLyrics, vr::Union(kTitle, kUnison))));
+    CheckRect(held.rect[top], grown);
+    // over 8 s on, only what's been since: the short line, still hung by the
+    // lyrics' bottom
+    held = hold.Hold(pieces({kMeter, kScoreBox, short_line}), 12.5);
+    held = hold.Hold(pieces({kMeter, kScoreBox, short_line}), 16.6);
+    CheckRect(held.rect[top], Padded(short_line));
+    CHECK(held.anchor[top][1] == doctest::Approx(lyrics_bottom));
     // the next song starts afresh
     hold.Reset();
-    held = hold.Hold(vr::HudPiecesOf(f, SongPanel(f)));
-    CheckRect(held.rect[int(vr::HudPiece::kTop)], Padded(kLyrics));
+    held = hold.Hold(pieces({kMeter, kScoreBox, kTitle}), 20);
+    CheckRect(held.rect[top], Padded(kTitle));
+    CHECK(held.anchor[top][1] == doctest::Approx(Padded(kTitle).v1));
 }
 
 TEST_CASE("pieces that overlap in the picture are drawn apart in the image, the rest stay") {
@@ -324,7 +342,7 @@ TEST_CASE("pieces that overlap in the picture are drawn apart in the image, the 
     CHECK(std::memcmp(&f.draws[card].view_proj, &flat, sizeof(Mat4)) == 0);
     // held, they're packed as they grow
     vr::HudPieceHold hold;
-    const vr::HudPieces held = hold.Hold(p);
+    const vr::HudPieces held = hold.Hold(p, 0);
     CHECK(vr::HudPiecesMoved(held));
     CHECK(held.offset[meter][1] == doctest::Approx(p.offset[meter][1]));
 }

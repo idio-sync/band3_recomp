@@ -1586,7 +1586,26 @@ class Renderer {
             // held through the song; where they overlap in the picture (four
             // parts' vocals) and they're shown, drawn apart in the image
             vr::HudPieces pieces;
-            if (in_song) pieces = vr_hud_hold_.Hold(vr::HudPiecesOf(*cap, ho));
+            if (in_song) {
+                uint32_t grew = 0;
+                const double now_s =
+                    std::chrono::duration<double>(Clock::now().time_since_epoch()).count();
+                pieces = vr_hud_hold_.Hold(vr::HudPiecesOf(*cap, ho), now_s, &grew);
+                // a settled piece growing: what came, at most once a second
+                if (grew && now_s - vr_hud_grew_logged_ >= 1) {
+                    vr_hud_grew_logged_ = now_s;
+                    std::string what;
+                    for (int k = 0; k < vr::kHudPieces; k++) {
+                        if (!(grew >> k & 1)) continue;
+                        const vr::PictureRect& r = pieces.rect[k];
+                        what += fmt::format("{}{} to u {:.3f}..{:.3f} v {:.3f}..{:.3f}",
+                                            what.empty() ? "" : "; ",
+                                            vr::HudPieceName(vr::HudPiece(k)), r.u0, r.u1, r.v0,
+                                            r.v1);
+                    }
+                    REXLOG_INFO("vr: the HUD's pieces grew (capture {}): {}", cap->frame, what);
+                }
+            }
             if (vr::HudPiecesMoved(pieces) &&
                 vr::PlaceHudPieces(layout, head, pieces, split_layout).count > 0) {
                 hud_moved = std::make_shared<FrameCapture>();
@@ -1765,6 +1784,8 @@ class Renderer {
     // and the pieces last shown
     bool vr_hud_moved_ = false;
     vr::HudSplit vr_hud_split_;
+    // when a piece's growing was last logged (steady seconds)
+    double vr_hud_grew_logged_ = -1e9;
     // vr_gpu_queue_wait found no fence to wait on, logged once
     bool vr_fence_logged_ = false;
     // the game's cap for VR as last set (pacing::SetVrCap), none set

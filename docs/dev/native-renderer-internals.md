@@ -742,11 +742,18 @@ What each does, how it was measured and why it defaults as it does. The
   --overlay-only --track-eyes --hud-pieces`) one player's (trk_a), two players'
   (screen-mp2-25s) and four parts' (screen-mp4-10s, -25s) split into meter, score and top with
   nothing left over, and the three pause menus stayed whole; finding them took 0.010-0.021 ms.
-  `HudPieceHold` keeps each piece's union through the song (`VrFrame`'s `vr_hud_pieces_`,
-  reset outside songs), so a piece never shrinks as lyrics' lines change, and hangs it by the
-  anchor it first had (the meter's bottom right corner, the score's bottom left, the top's
-  bottom edge at the picture's middle), so nothing in it moves as it grows; a frame that can't
-  be split shows the whole panel once three come in a row. `PlaceHudPieces` hangs them from
+  `HudPieceHold` (`VrFrame`'s `vr_hud_pieces_`, reset outside songs) takes a piece as each
+  frame has it for 2 s after it first shows (RB3 slides and grows the HUD in), then pins its
+  anchor (the meter's bottom right corner, the score's bottom left, the top's bottom edge at
+  the picture's middle) till the song ends, so nothing in it moves as its rectangle changes,
+  and keeps that rectangle the union of the last 4 to 8 s, so it grows at once, doesn't
+  jitter as lyrics' lines change length, and lets go of what's gone. The first try, a union
+  over the whole song from the anchor first seen, caught the HUD coming in: on the Steam
+  Frame's session the meter was first logged 0.19 m tall (0.29 settled) and later 0.21 x
+  0.53 m. With the settling, an 80 s run logged the meter at u 0.039..0.089 v 0.31..0.69 and
+  the score at u 0.767..0.981 v 0.197..0.396 throughout, the top strip following the lyrics'
+  lines (`vr: the HUD's pieces grew`, at most once a second). A frame that can't be split
+  shows the whole panel once three come in a row. `PlaceHudPieces` hangs them from
   the recentred head, each facing it, level, at the size it'd be in the whole picture
   `vr_hud_piece_width` (55, the panel's) degrees across from where it hangs: the meter's
   corner `vr_hud_side_gap` (0.05 m) left of the leftmost track's edge at its strikeline and
@@ -777,7 +784,10 @@ What each does, how it was measured and why it defaults as it does. The
   pose, middle from the head and corners in the left eye), which `tools/vr_window_check.py`
   lists and puts into `<name>.vr.sim.png` (and outlined in `.vr.pieces.png`); `native_view
   stats`' `xr` block's `hud` counts `split_frames` and `pieces_per_split_frame`, and the log
-  says where they hang as they first show (`vr: the HUD in 3 pieces, ...`).
+  says where they hang as they first show (`vr: the HUD in 3 pieces, ...`). With the Steam
+  Frame's session synchronized but not worn (2026-10-21, SteamVR 2.18.4 at 144 Hz, so
+  throttled and not for timing) all 262 frames of 40 s in the song ended with 3 piece
+  layers, none refused, and the panel's picture cost 0.18 ms of CPU with the split as without.
   Each runtime frame's timing (`vr_timing.h`'s `FrameTiming`) is kept in a ring of the last
   8,192 (about 68 s at 120 Hz), which the harness's `vr_frames [name]` writes as CSV to
   `logs/vr_frames-<name>.csv` beside the exe: in ms from xrWaitFrame's return, xrBeginFrame's

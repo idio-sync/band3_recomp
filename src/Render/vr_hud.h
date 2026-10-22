@@ -343,41 +343,80 @@ inline void ShiftHudPieces(const FrameCapture& in, const RasterOptions& o, const
 // were (HudPieceHold), so a stray one doesn't flash it up
 inline constexpr int kHudWholeAfter = 3;
 
-// The pieces held through a song (native_view.cpp's VrFrame): each one the
-// union of what it has been since the last Reset (the song's start), so a
-// piece only grows and never jitters as lyrics' lines change length or the
-// song's title goes; each hung by the anchor it first had, so what's in it
-// stays where it was as it grows (a Unison Bonus under the vocals' strip
-// reaches below where the strip hangs). Frames that can't be split (a pause
-// menu) show the whole panel once kHudWholeAfter come in a row, until then
-// the pieces as they were, and leave them as they were.
+// RB3 brings the HUD in as the song starts, its pieces sliding and growing
+// into place: a piece is taken as it is each frame until this long after it
+// first shows, then hung by the anchor it has then (HudPieceHold)
+inline constexpr double kHudSettleSeconds = 2;
+// a settled piece's rectangle: the union of what it's been over the last
+// kHudHoldSeconds to twice that (two buckets of it)
+inline constexpr double kHudHoldSeconds = 4;
+
+// The pieces held through a song (native_view.cpp's VrFrame; `t` in seconds
+// of any steady clock). Coming in (kHudSettleSeconds from its first frame) a
+// piece is as each frame has it; then it's hung by the anchor it had (pinned
+// until Reset, the song's end), so what's in it stays where it was however
+// its rectangle changes (a Unison Bonus under the vocals' strip reaching
+// below where the strip hangs), and its rectangle is the union of what it's
+// been for the last 4 to 8 s (kHudHoldSeconds), so it doesn't jitter as
+// lyrics' lines change length, grows at once, and lets go of what's gone (the
+// song's title, a notice). `grew`, if given, gets a bit (1 << piece) for each
+// settled piece that grew past what it was. Frames that can't be split (a
+// pause menu) show the whole panel once kHudWholeAfter come in a row, until
+// then the pieces as they were, and leave them as they were.
 class HudPieceHold {
  public:
-    HudPieces Hold(const HudPieces& now) {
+    HudPieces Hold(const HudPieces& now, double t, uint32_t* grew = nullptr) {
+        if (grew) *grew = 0;
         if (!now.split) {
             if (++unsplit_ < kHudWholeAfter && held_.split) return held_;
             return now;
         }
         unsplit_ = 0;
+        if (bucket_from_ < 0) bucket_from_ = t;
+        if (t - bucket_from_ >= kHudHoldSeconds) {
+            for (int k = 0; k < kHudPieces; k++) {
+                bucket_[0][k] = bucket_[1][k];
+                bucket_[1][k] = {};
+            }
+            bucket_from_ = t;
+        }
         for (int k = 0; k < kHudPieces; k++) {
-            if (held_.rect[k].Empty())
-                for (int c = 0; c < 2; c++) held_.anchor[k][c] = now.anchor[k][c];
-            held_.rect[k] = Union(held_.rect[k], now.rect[k]);
+            const PictureRect& r = now.rect[k];
+            if (!r.Empty() && first_[k] < 0) first_[k] = t;
             held_.draws[k] = now.draws[k];
             held_.rects[k] = std::max(held_.rects[k], now.rects[k]);
+            if (first_[k] < 0 || t - first_[k] < kHudSettleSeconds) {
+                // coming in: as it is
+                held_.rect[k] = r;
+                for (int c = 0; c < 2; c++) held_.anchor[k][c] = now.anchor[k][c];
+                continue;
+            }
+            if (!pinned_[k]) {
+                pinned_[k] = true;
+                for (int c = 0; c < 2; c++) held_.anchor[k][c] = now.anchor[k][c];
+                held_.rect[k] = {};
+            }
+            bucket_[1][k] = Union(bucket_[1][k], r);
+            const PictureRect next = Union(bucket_[0][k], bucket_[1][k]);
+            const PictureRect& was = held_.rect[k];
+            if (grew && !was.Empty() &&
+                (next.u0 < was.u0 || next.v0 < was.v0 || next.u1 > was.u1 || next.v1 > was.v1))
+                *grew |= 1u << k;
+            held_.rect[k] = next;
         }
         held_.split = true;
         held_.full = held_.menu = 0;
         PackHudPieces(held_);
         return held_;
     }
-    void Reset() {
-        held_ = {};
-        unsplit_ = 0;
-    }
+    void Reset() { *this = HudPieceHold(); }
 
  private:
     HudPieces held_;
+    PictureRect bucket_[2][kHudPieces];  // the last kHudHoldSeconds' before, and since
+    double bucket_from_ = -1;
+    double first_[kHudPieces] = {-1, -1, -1, -1};
+    bool pinned_[kHudPieces] = {};
     int unsplit_ = 0;
 };
 
@@ -475,7 +514,7 @@ inline HudPieceQuad PieceFacing(HudPiece kind, const PictureRect& r, float au, f
 // `l`, ResolveFrame's: in songs with the tracks in front (track_count) and
 // the panel on its own place, with `s.on`; else none, the whole panel. `head`
 // is the recenter's (FrameInputs::head), its yaw the tracks' and window's.
-// Each piece is hung by its anchor (HudPieces::anchor, as first seen):
+// Each piece is hung by its anchor (HudPieces::anchor, as it settled):
 //   meter: its bottom right corner `side_gap` left of the leftmost track's
 //     left edge at its strikeline, at the strikeline's height
 //   score: its bottom left corner `side_gap` right of the rightmost track's
