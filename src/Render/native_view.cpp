@@ -1355,9 +1355,12 @@ class Renderer {
     // published as the window's picture; else, and the right always, into
     // the eye slots. The HUD's draws go onto the HUD panel (vr_hud), the
     // capture itself drawn BackBufferPart::kHud into the HUD slot when it's
-    // new, and xr_present.cpp's quad layer shows it over the eyes. The frame's
-    // timing (f.timing, vr_timing.h) goes to Session::Record once the window
-    // has its picture, the next xrWaitFrame waiting on that too.
+    // new, and xr_present.cpp's quad layer shows it over the eyes; in songs
+    // with vr_hud_split, cut into pieces (vr_hud.h: found in each new picture,
+    // held through the song in vr_hud_pieces_, hung each frame by
+    // PlaceHudPieces), a quad layer each. The frame's timing (f.timing,
+    // vr_timing.h) goes to Session::Record once the window has its picture,
+    // the next xrWaitFrame waiting on that too.
     void VrFrame(const RasterOptions& o, uint64_t generation, bool presenting,
                  double& decode_pending_ms, std::vector<uint32_t>& rgba) {
         using Clock = std::chrono::steady_clock;
@@ -1416,8 +1419,8 @@ class Renderer {
         // fixed viewpoint found in the venue, or another chosen: the game's
         // cuts don't move it), back to the picture over vr_cut_fade_ms of the
         // runtime's display time
-        vr::FrameLayout layout =
-            xr::LayoutFor(*cap, f, InSong() && SongScreen(), &vr_track_hold_);
+        const bool in_song = InSong() && SongScreen();
+        vr::FrameLayout layout = xr::LayoutFor(*cap, f, in_song, &vr_track_hold_);
         const int kind = layout.eyes_black ? 0 : layout.window ? 1 : 2;
         const vr::Anchor& a = layout.anchor;
         const bool moved = kind == 2 && vr_kind_ == 2 && !layout.anchor_follows &&
@@ -1575,8 +1578,19 @@ class Renderer {
                 vr_hud_frame_ = int64_t(cap->frame);
                 t.hud = true;
                 t.hud_submitted_ms = at();
+                // the picture's pieces, which its image is cut into in songs
+                // (vr_hud_split), held through the song
+                if (in_song) vr_hud_pieces_ = vr_hud_hold_.Hold(vr::HudPiecesOf(*cap, ho));
             }
         }
+        if (!in_song) {
+            vr_hud_hold_.Reset();
+            vr_hud_pieces_ = {};
+        }
+        // where they hang this frame (none: the whole panel)
+        const vr::HudSplit split = vr::PlaceHudPieces(
+            layout, f.have_head ? f.head : vr::HeadPose(f.pose[0], f.pose[1]), vr_hud_pieces_,
+            xr::HudSplitSettings());
         // Each finished on SDL's queue before the SDK's samples it: the SDK's
         // queue waits for SDL_gpu's fences (GpuRenderer::OutputFence) before
         // its copies, so the images go to the runtime without the CPU waiting
@@ -1624,7 +1638,7 @@ class Renderer {
         const uint64_t newest = LatestCaptureFrame();
         t.newer = newest > cap->frame ? uint32_t(newest - cap->frame) : 0;
         // a missing eye shows its colour rather than the other's picture
-        xs.Present(f, eyes, hud, layout, since_begin(), waits);
+        xs.Present(f, eyes, hud, layout, since_begin(), waits, &split);
         // Off the frame's critical path now: the copies finished (and with
         // them the waits on SDL_gpu's fences, which OutputDone then lets go,
         // as SDL resets a fence it reuses), before the next frame draws into
@@ -1726,6 +1740,10 @@ class Renderer {
     uint64_t vr_timed_frame_ = 0;
     // the capture the HUD panel's picture is of (-1 none)
     int64_t vr_hud_frame_ = -1;
+    // that picture's pieces (vr_hud.h's HudPiecesOf), held through the song
+    // (vr_hud_hold_, Reset outside songs), which vr_hud_split cuts it into
+    vr::HudPieces vr_hud_pieces_;
+    vr::HudPieceHold vr_hud_hold_;
     // vr_gpu_queue_wait found no fence to wait on, logged once
     bool vr_fence_logged_ = false;
     // the game's cap for VR as last set (pacing::SetVrCap), none set

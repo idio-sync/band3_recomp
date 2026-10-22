@@ -43,7 +43,11 @@
 // swapchain cleared black at vr_window_dim's alpha, cleared again as that
 // changes), and the panel in the window or on its own place; or black eyes
 // and the panel alone. The eyes fade in from black after a cut (PresentConstants'
-// frame_size.w); the panel doesn't.
+// frame_size.w); the panel doesn't. In songs with vr_hud_split the panel is
+// cut into pieces (vr_hud.h's HudSplit, VrFrame's from the panel's picture
+// and the layout): a quad layer each, of its rectangle of the one panel image
+// (subImage.imageRect), hung where PlaceHudPieces says. With the dark's nine
+// that's 1 + 9 + 4 layers at most, within the 16 OpenXR promises.
 //
 // Each runtime frame's timing (vr_timing.h's FrameTiming) is filled by
 // WaitFrame, the worker's VrFrame and Present, and handed to Record, which
@@ -53,6 +57,7 @@
 #include <cstdint>
 #include <string>
 
+#include "src/Render/vr_hud.h"
 #include "src/Render/vr_pose.h"
 #include "src/Render/vr_timing.h"
 #include "src/Render/vr_venue.h"
@@ -129,6 +134,9 @@ struct Stats {
     // image; frames ended with its quad layer; recenters
     uint64_t hud_renders = 0, hud_copies = 0, hud_layers = 0, recenters = 0;
     double hud_render_ms = 0, hud_gpu_ms = 0;
+    // frames ended with the panel in pieces (vr_hud_split), and the pieces'
+    // quad layers summed over them
+    uint64_t hud_split_frames = 0, hud_pieces = 0;
     // frames ended with the eyes through the game camera's window, with
     // black eyes (no world to see), and the cuts faded; with the tracks in
     // the eyes (vr_track_3d)
@@ -156,20 +164,23 @@ class Session {
     // likewise), goes into the panel's image; null keeps the image last
     // drawn. `layout` says the rest: black eyes, their fade, the dark around
     // the window, and the panel's quad layer over them all (once it has an
-    // image). The outputs are finished on the GPU, or `waits` (up to
-    // kQueueWaits, null fences skipped) are the fences SDL_gpu signals as
-    // they finish (GpuRenderer::OutputFence), which the SDK's queue waits on
-    // before its copies: the images are released and xrEndFrame called
-    // without the CPU waiting for the GPU (OpenXR's D3D12 binding asks only
-    // that their writes be submitted to the session's queue first). Fills
-    // f.timing's Present part, its queue_wait whether `waits` were queued.
+    // image), or with `split` (count over 0) its pieces' layers instead,
+    // each of its rectangle of the panel's image. The outputs are finished
+    // on the GPU, or `waits` (up to kQueueWaits, null fences skipped) are
+    // the fences SDL_gpu signals as they finish (GpuRenderer::OutputFence),
+    // which the SDK's queue waits on before its copies: the images are
+    // released and xrEndFrame called without the CPU waiting for the GPU
+    // (OpenXR's D3D12 binding asks only that their writes be submitted to the
+    // session's queue first). Fills f.timing's Present part, its queue_wait
+    // whether `waits` were queued.
     static constexpr int kQueueWaits = 3;
     struct QueueWait {
         void* fence = nullptr;  // ID3D12Fence on the SDK's device
         uint64_t value = 0;
     };
     bool Present(FrameViews& f, void* const eye[2], void* hud, const vr::FrameLayout& layout,
-                 double begin_to_present_ms, const QueueWait* waits = nullptr);
+                 double begin_to_present_ms, const QueueWait* waits = nullptr,
+                 const vr::HudSplit* split = nullptr);
     // whether the SDK's queue has finished the last Present's copies (and
     // with them the waits queued before them). Never waits.
     bool CopiesDone();
@@ -223,5 +234,9 @@ vr::FrameLayout LayoutFor(const FrameCapture& fc, const FrameViews& f, bool in_s
 // the song's venue as the fixed viewpoints last found it (none outside songs
 // before the first)
 vr::VenueRef CurrentVenue();
+
+// vr_hud.h's HudSplitLayout from the settings (vr_hud_split,
+// vr_hud_piece_width, vr_hud_side_gap, vr_hud_side_max, vr_lyrics_*)
+vr::HudSplitLayout HudSplitSettings();
 
 }  // namespace band3::render::xr

@@ -1116,6 +1116,54 @@ REXCVAR_DEFINE_BOOL(vr_hud_recenter, false, "Band3/Advanced/Native renderer",
     "when the headset's own recenter moves its seated position")
     .debug_only();
 
+REXCVAR_DEFINE_BOOL(vr_hud_split, true, "Band3/Advanced/Native renderer",
+    "With vr_hud and vr_track_3d, during songs: split the HUD into pieces, each where it's "
+    "easy to look at with the 3D track: the band meter beside the track's left edge and the "
+    "score and stars beside its right, at the strikeline's distance; the lyrics, the vocals and "
+    "the song's title in a strip above the game camera's window (vr_lyrics_*). Off shows the "
+    "whole HUD on one panel, as before, to compare. Menus and the pause menu are always the "
+    "whole panel. Takes effect at once")
+    .debug_only();
+
+REXCVAR_DEFINE_DOUBLE(vr_hud_piece_width, 55.0, "Band3/Advanced/Native renderer",
+    "With vr_hud_split: how big the HUD's pieces are, as how wide the game's whole picture "
+    "would look from where you are, in degrees (55: as big as they look on vr_hud_width's "
+    "panel), wherever they hang. Takes effect at once")
+    .range(10.0, 160.0)
+    .debug_only();
+
+REXCVAR_DEFINE_DOUBLE(vr_hud_side_gap, 0.05, "Band3/Advanced/Native renderer",
+    "With vr_hud_split: the space between the track's edge and the band meter or the score "
+    "beside it, in metres. Takes effect at once")
+    .range(-1.0, 2.0)
+    .debug_only();
+
+REXCVAR_DEFINE_DOUBLE(vr_hud_side_max, 40.0, "Band3/Advanced/Native renderer",
+    "With vr_hud_split: the band meter and the score go beside the outermost tracks while "
+    "they'd be within this many degrees of straight ahead (one player's tracks), and above "
+    "the tracks' middle otherwise (two players', four parts'). Takes effect at once")
+    .range(0.0, 90.0)
+    .debug_only();
+
+REXCVAR_DEFINE_DOUBLE(vr_lyrics_height, 0.05, "Band3/Advanced/Native renderer",
+    "With vr_hud_split, through the game camera's window: how far above the window's top edge "
+    "the strip with the lyrics, the vocals and the song's title starts, in metres (negative "
+    "brings it down over the window). Takes effect at once")
+    .range(-3.0, 3.0)
+    .debug_only();
+
+REXCVAR_DEFINE_DOUBLE(vr_lyrics_distance, 2.5, "Band3/Advanced/Native renderer",
+    "With vr_hud_split, from a fixed vr_viewpoint: how far ahead the strip with the lyrics, "
+    "the vocals and the song's title hangs, in metres. Takes effect at once")
+    .range(0.5, 20.0)
+    .debug_only();
+
+REXCVAR_DEFINE_DOUBLE(vr_lyrics_elevation, 15.0, "Band3/Advanced/Native renderer",
+    "With vr_hud_split, from a fixed vr_viewpoint: how high the strip with the lyrics, the "
+    "vocals and the song's title starts, in degrees above your eyes. Takes effect at once")
+    .range(-45.0, 80.0)
+    .debug_only();
+
 REXCVAR_DEFINE_BOOL(vr_track_3d, true, "Band3/Advanced/Native renderer",
     "With vr, during songs: show the track (the highway with its gems, smashers, Overdrive "
     "meter and multiplier) as a 3D object in front of you, each eye seeing it from where it "

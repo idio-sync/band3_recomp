@@ -79,6 +79,18 @@ vr::VenueRef CurrentVenue() {
     return g_venue.Ref();
 }
 
+vr::HudSplitLayout HudSplitSettings() {
+    vr::HudSplitLayout s;
+    s.on = REXCVAR_GET(vr_hud_split);
+    s.piece_width = float(REXCVAR_GET(vr_hud_piece_width));
+    s.side_gap = float(REXCVAR_GET(vr_hud_side_gap));
+    s.side_max = float(REXCVAR_GET(vr_hud_side_max));
+    s.lyrics_height = float(REXCVAR_GET(vr_lyrics_height));
+    s.lyrics_distance = float(REXCVAR_GET(vr_lyrics_distance));
+    s.lyrics_elevation = float(REXCVAR_GET(vr_lyrics_elevation));
+    return s;
+}
+
 vr::FrameLayout LayoutFor(const FrameCapture& fc, const FrameViews& f, bool in_song,
                           vr::TrackHold* hold, const vr::Anchor* loaded) {
     vr::Viewpoint vp;
@@ -175,7 +187,7 @@ uint32_t Session::Width() const { return 0; }
 uint32_t Session::Height() const { return 0; }
 bool Session::WaitFrame(FrameViews&) { return false; }
 bool Session::Present(FrameViews&, void* const[2], void*, const vr::FrameLayout&, double,
-                      const QueueWait*) {
+                      const QueueWait*, const vr::HudSplit*) {
     return false;
 }
 bool Session::CopiesDone() { return true; }
@@ -342,6 +354,9 @@ struct Session::Impl {
     // an image of its never came back (logged): the panel's left as it is
     bool hud_failed = false;
     bool hud_logged = false;  // its first frame's ending, logged
+    // the pieces' count and place last logged (vr_hud_split; 0 the whole panel)
+    int split_logged_count = 0;
+    bool split_logged_beside = false;
     // the head pose the panel hangs from (HudPlacement), taken at the first
     // located frame and again at a recenter: vr_hud_recenter's change, or the
     // runtime moving LOCAL space, from its frame at recenter_after on
@@ -886,7 +901,7 @@ bool Session::CopiesDone() {
 
 bool Session::Present(FrameViews& f, void* const eye[2], void* hud,
                       const vr::FrameLayout& layout, double begin_to_present_ms,
-                      const QueueWait* waits) {
+                      const QueueWait* waits, const vr::HudSplit* split) {
     Impl& m = *impl_;
     const auto start = std::chrono::steady_clock::now();
     vr::FrameTiming& t = f.timing;
@@ -1086,18 +1101,20 @@ bool Session::Present(FrameViews& f, void* const eye[2], void* hud,
     layer.viewCount = 2;
     layer.views = views;
     // the layers, bottom up: the eyes, the dark around the window, the panel
-    const XrCompositionLayerBaseHeader* layers[2 + vr::kFrameQuads] = {
+    // or its pieces
+    const XrCompositionLayerBaseHeader* layers[1 + vr::kFrameQuads + vr::kHudPieces] = {
         reinterpret_cast<const XrCompositionLayerBaseHeader*>(&layer)};
     uint32_t layer_count = 1;
-    // a quad layer of `chain`'s whole image, blended by its alpha
-    // (premultiplied colour: not unpremultiplied first)
-    auto quad_of = [&](const Impl::Chain& chain, uint32_t w, uint32_t h, const vr::HudQuad& q) {
+    // a quad layer of the rectangle x, y, w, h of `chain`'s image, blended by
+    // its alpha (premultiplied colour: not unpremultiplied first)
+    auto quad_of = [&](const Impl::Chain& chain, int32_t x, int32_t y, int32_t w, int32_t h,
+                       const vr::HudQuad& q) {
         XrCompositionLayerQuad l{XR_TYPE_COMPOSITION_LAYER_QUAD};
         l.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
         l.space = m.local;
         l.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
         l.subImage.swapchain = chain.swapchain;
-        l.subImage.imageRect = {{0, 0}, {int32_t(w), int32_t(h)}};
+        l.subImage.imageRect = {{x, y}, {w, h}};
         l.pose.orientation = {q.pose.q[0], q.pose.q[1], q.pose.q[2], q.pose.q[3]};
         l.pose.position = {q.pose.p[0], q.pose.p[1], q.pose.p[2]};
         l.size = {q.size[0], q.size[1]};
@@ -1107,18 +1124,30 @@ bool Session::Present(FrameViews& f, void* const eye[2], void* hud,
     const bool show_frames = drawn && layout.frame_layers && m.black_alpha >= 0;
     if (show_frames) {
         for (int i = 0; i < layout.frame_quads && i < vr::kFrameQuads; i++) {
-            frames[i] = quad_of(m.black, Impl::kBlackSize, Impl::kBlackSize, layout.frame[i]);
+            frames[i] = quad_of(m.black, 0, 0, Impl::kBlackSize, Impl::kBlackSize, layout.frame[i]);
             layers[layer_count++] =
                 reinterpret_cast<const XrCompositionLayerBaseHeader*>(&frames[i]);
         }
     }
     // The HUD panel over them all, once its image was ever released (the
-    // last released is what the layer shows), where the layout says
+    // last released is what the layer shows), where the layout says; or its
+    // pieces (vr_hud_split), each its rectangle of the image, whole texels
     const bool show_hud = drawn && m.hud_released && layout.hud;
+    const int pieces = show_hud && split ? std::min(split->count, vr::kHudPieces) : 0;
     XrCompositionLayerQuad quad{XR_TYPE_COMPOSITION_LAYER_QUAD};
-    if (show_hud) {
-        quad = quad_of(m.hud, m.width, m.height, layout.hud_quad);
+    XrCompositionLayerQuad piece_quads[vr::kHudPieces];
+    if (show_hud && pieces == 0) {
+        quad = quad_of(m.hud, 0, 0, int32_t(m.width), int32_t(m.height), layout.hud_quad);
         layers[layer_count++] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&quad);
+    }
+    for (int i = 0; i < pieces; i++) {
+        const vr::HudPieceQuad& p = split->piece[i];
+        int32_t x = 0, y = 0, w = 0, h = 0;
+        vr::PieceTexels(p.rect, m.width, m.height, x, y, w, h);
+        if (w <= 0 || h <= 0) continue;
+        piece_quads[i] = quad_of(m.hud, x, y, w, h, p.quad);
+        layers[layer_count++] =
+            reinterpret_cast<const XrCompositionLayerBaseHeader*>(&piece_quads[i]);
     }
     XrFrameEndInfo ei{XR_TYPE_FRAME_END_INFO};
     ei.displayTime = f.display_time;
@@ -1131,13 +1160,30 @@ bool Session::Present(FrameViews& f, void* const eye[2], void* hud,
     t.ended_ms = MsFromWake(t.wake_ns);
     t.layer = drawn && XR_SUCCEEDED(r);
     const double present_ms = MsSince(start);
-    if (show_hud && XR_SUCCEEDED(r) && !m.hud_logged) {
+    if (show_hud && pieces == 0 && XR_SUCCEEDED(r) && !m.hud_logged) {
         m.hud_logged = true;
         REXLOG_INFO("vr: the HUD panel's quad layer is up: {:.2f} x {:.2f} m at "
                     "{:.2f},{:.2f},{:.2f} m",
                     quad.size.width, quad.size.height, quad.pose.position.x,
                     quad.pose.position.y, quad.pose.position.z);
     }
+    // the pieces as they're first shown, and again as their count or place
+    // changes (a song's first frames, two players' after one)
+    if (pieces > 0 && XR_SUCCEEDED(r) &&
+        (pieces != m.split_logged_count || split->beside != m.split_logged_beside)) {
+        m.split_logged_count = pieces;
+        m.split_logged_beside = split->beside;
+        std::string what;
+        for (int i = 0; i < pieces; i++) {
+            const vr::HudPieceQuad& p = split->piece[i];
+            what += fmt::format("{}{} {:.2f} x {:.2f} m at {:.2f},{:.2f},{:.2f}", i ? "; " : "",
+                                vr::HudPieceName(p.kind), p.quad.size[0], p.quad.size[1],
+                                p.quad.pose.p[0], p.quad.pose.p[1], p.quad.pose.p[2]);
+        }
+        REXLOG_INFO("vr: the HUD in {} pieces, the meter and score {}: {}", pieces,
+                    split->beside ? "beside the tracks" : "above their middle", what);
+    }
+    if (pieces == 0) m.split_logged_count = 0;
     if (layout.window && drawn && XR_SUCCEEDED(r) && !m.window_logged) {
         m.window_logged = true;
         const vr::WindowFrame& w = layout.window_frame;
@@ -1156,6 +1202,10 @@ bool Session::Present(FrameViews& f, void* const eye[2], void* hud,
         std::lock_guard lock(m.stats_mutex);
         if (hud_drawn) m.stats.hud_copies++;
         if (show_hud) m.stats.hud_layers++;
+        if (pieces > 0) {
+            m.stats.hud_split_frames++;
+            m.stats.hud_pieces += uint64_t(pieces);
+        }
         if (drawn && layout.window) m.stats.window_frames++;
         if (drawn && layout.eyes_black) m.stats.black_frames++;
         if (drawn && layout.track_count > 0) m.stats.track_frames++;
@@ -1273,12 +1323,16 @@ std::string Session::MeasuredJson() {
     const std::string hud = fmt::format(
         "{{\"renders\":{},\"copies\":{},\"layers\":{},\"recenters\":{},"
         "\"render_ms_per_render\":{:.3f},\"gpu_ms_per_render\":{:.3f},"
-        "\"render_ms_per_frame\":{:.3f},\"gpu_ms_per_frame\":{:.3f},\"srgb_view\":{}}}",
+        "\"render_ms_per_frame\":{:.3f},\"gpu_ms_per_frame\":{:.3f},\"srgb_view\":{},"
+        "\"split_frames\":{},\"pieces_per_split_frame\":{:.2f}}}",
         renders, now.hud_copies - from.hud_copies, now.hud_layers - from.hud_layers,
         now.recenters - from.recenters, per(now.hud_render_ms, from.hud_render_ms, renders),
         per(now.hud_gpu_ms, from.hud_gpu_ms, renders),
         per(now.hud_render_ms, from.hud_render_ms, frames),
-        per(now.hud_gpu_ms, from.hud_gpu_ms, frames), now.hud_srgb_view ? "true" : "false");
+        per(now.hud_gpu_ms, from.hud_gpu_ms, frames), now.hud_srgb_view ? "true" : "false",
+        now.hud_split_frames - from.hud_split_frames,
+        per(double(now.hud_pieces), double(from.hud_pieces),
+            now.hud_split_frames - from.hud_split_frames));
     return fmt::format(
         "{{\"state\":{},\"runtime\":{},\"system\":{},\"width\":{},\"height\":{},"
         "\"display_period_ms\":{:.3f},\"frames\":{},\"skipped\":{},\"hidden\":{},\"late\":{},"
