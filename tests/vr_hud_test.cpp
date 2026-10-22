@@ -7,6 +7,7 @@
 
 #include <doctest/doctest.h>
 #include <cmath>
+#include <cstring>
 #include <memory>
 #include <vector>
 #include "src/Render/free_cam.h"
@@ -267,6 +268,67 @@ TEST_CASE("the pieces held through a song: grown, never shrunk, hung where first
     CheckRect(held.rect[int(vr::HudPiece::kTop)], Padded(kLyrics));
 }
 
+TEST_CASE("pieces that overlap in the picture are drawn apart in the image, the rest stay") {
+    // apart in the picture: nothing moves
+    FrameCapture f = HudFrame({kMeter, kScoreBox, kTime, kTitle, kLyrics});
+    vr::HudPieces p = vr::HudPiecesOf(f, SongPanel(f));
+    REQUIRE(p.split);
+    CHECK_FALSE(vr::HudPiecesMoved(p));
+    // four parts': the vocals' strip across the top and the title under it
+    // reach over the score's box and the meter's top
+    const vr::PictureRect title4{0.627f, 0.344f, 0.746f, 0.379f};
+    f = HudFrame({kMeter, kScoreBox, kTime, kVocals, kPills, title4});
+    p = vr::HudPiecesOf(f, SongPanel(f));
+    REQUIRE(p.split);
+    CHECK(vr::HudPiecesMoved(p));
+    const int top = int(vr::HudPiece::kTop), meter = int(vr::HudPiece::kMeter),
+              score = int(vr::HudPiece::kScore);
+    CHECK(p.offset[top][0] == 0);
+    CHECK(p.offset[top][1] == 0);
+    // in the image, each within it and none within kPackGap of another
+    for (int a : {top, meter, score}) {
+        const vr::PictureRect r = vr::ImageRect(p, a);
+        CHECK(r.u0 >= 0);
+        CHECK(r.v0 >= 0);
+        CHECK(r.u1 <= 1);
+        CHECK(r.v1 <= 1);
+        for (int b : {top, meter, score}) {
+            if (a == b) continue;
+            const vr::PictureRect o = vr::ImageRect(p, b);
+            CAPTURE(a);
+            CAPTURE(b);
+            CHECK((r.u1 + vr::kPackGap <= o.u0 || o.u1 + vr::kPackGap <= r.u0 ||
+                   r.v1 + vr::kPackGap <= o.v0 || o.v1 + vr::kPackGap <= r.v0));
+        }
+    }
+    // the copy draws each moved piece's draws where its image rectangle is,
+    // the rest where they were; the capture itself untouched
+    FrameCapture moved;
+    vr::ShiftHudPieces(f, SongPanel(f), p, moved);
+    REQUIRE(moved.draws.size() == f.draws.size());
+    for (size_t d = f.post_boundary; d < f.draws.size(); d++) {
+        vr::PictureRect was, now;
+        if (f.draws[d].cam != kHudCam || !vr::HudDrawRect(f, f.draws[d], was)) continue;
+        REQUIRE(vr::HudDrawRect(moved, moved.draws[d], now));
+        const int k = int(vr::HudPieceOf(was));
+        CAPTURE(d);
+        CHECK(now.u0 == doctest::Approx(was.u0 + p.offset[k][0]).epsilon(1e-4));
+        CHECK(now.v0 == doctest::Approx(was.v0 + p.offset[k][1]).epsilon(1e-4));
+        CHECK(now.v1 == doctest::Approx(was.v1 + p.offset[k][1]).epsilon(1e-4));
+    }
+    // the meter's card, moved; the track's, not
+    const size_t card = f.post_boundary + 3, track = f.post_boundary;
+    CHECK(std::memcmp(&f.draws[card].view_proj, &moved.draws[card].view_proj, sizeof(Mat4)) != 0);
+    CHECK(std::memcmp(&f.draws[track].view_proj, &moved.draws[track].view_proj, sizeof(Mat4)) == 0);
+    const Mat4 flat = FlatVp();
+    CHECK(std::memcmp(&f.draws[card].view_proj, &flat, sizeof(Mat4)) == 0);
+    // held, they're packed as they grow
+    vr::HudPieceHold hold;
+    const vr::HudPieces held = hold.Hold(p);
+    CHECK(vr::HudPiecesMoved(held));
+    CHECK(held.offset[meter][1] == doctest::Approx(p.offset[meter][1]));
+}
+
 namespace {
 
 // a track camera's projection and view as RB3's (vr_pose_test.cpp's)
@@ -417,6 +479,11 @@ TEST_CASE("one player's meter and score beside the track at its strikeline, faci
     const vr::HudPieceQuad* score = Find(split, vr::HudPiece::kScore);
     REQUIRE(meter);
     REQUIRE(score);
+    // the meter shown from where it is in the picture; the score, whose
+    // progress icon's corner meets the title's, from elsewhere in the image
+    CheckRect(meter->image, meter->rect);
+    CheckRect(score->image, vr::ImageRect(p, int(vr::HudPiece::kScore)));
+    CHECK(vr::HudPiecesMoved(p));
     // the track is 19.6 of its units across at 30 a metre, its strikeline
     // 1.2 m ahead and 0.3 below the eyes: the meter's bottom right corner
     // side_gap left of its left edge, the score's bottom left right of its

@@ -1143,7 +1143,7 @@ bool Session::Present(FrameViews& f, void* const eye[2], void* hud,
     for (int i = 0; i < pieces; i++) {
         const vr::HudPieceQuad& p = split->piece[i];
         int32_t x = 0, y = 0, w = 0, h = 0;
-        vr::PieceTexels(p.rect, m.width, m.height, x, y, w, h);
+        vr::PieceTexels(p.image, m.width, m.height, x, y, w, h);
         if (w <= 0 || h <= 0) continue;
         piece_quads[i] = quad_of(m.hud, x, y, w, h, p.quad);
         layers[layer_count++] =

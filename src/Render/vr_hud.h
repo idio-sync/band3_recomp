@@ -24,6 +24,7 @@
 // would be at vr_hud_piece_width degrees seen from the head and facing it.
 // No OpenXR here: the same on every platform, and unit-tested.
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 
@@ -169,13 +170,85 @@ inline bool HudDrawRect(const FrameCapture& fc, const DrawItem& d, PictureRect& 
 // whole picture, none of a menu over the song (a camera of z range 0..1
 // drawing after the flat HUD's, as the pause menu's does), the rest's at
 // most kHudRestMax
+//
+// Pieces can overlap in the picture (four parts' vocals' strip runs across
+// the top over the score box's and the meter's tops, the song's title under
+// it beside the score), and a quad layer shows a rectangle of the image, so
+// each piece also has an `offset` (u, v) in the panel's image from where it
+// is in the picture (PackHudPieces), where its draws are drawn instead
+// (ShiftHudPieces): its rectangle of the image (ImageRect) then holds it
+// alone. One player's score box meets the song's title's corner (the
+// progress bar's icon under it), so the score moves; two players' don't
+// overlap. Moving costs a copy of the capture's draws, 0.02-0.15 ms.
 struct HudPieces {
     bool split = false;
     PictureRect rect[kHudPieces];
     float anchor[kHudPieces][2] = {};
+    float offset[kHudPieces][2] = {};
     uint32_t draws[kHudPieces] = {};
+    uint32_t rects[kHudPieces] = {};  // of them DrawRect quads, which stay put
     uint32_t full = 0, menu = 0;  // draws over the whole picture, a menu's
 };
+
+// piece `k`'s rectangle of the panel's image (HudPieces::offset)
+inline PictureRect ImageRect(const HudPieces& p, int k) {
+    const PictureRect& r = p.rect[k];
+    return {r.u0 + p.offset[k][0], r.v0 + p.offset[k][1], r.u1 + p.offset[k][0],
+            r.v1 + p.offset[k][1]};
+}
+
+// whether any piece is drawn elsewhere in the image than in the picture
+inline bool HudPiecesMoved(const HudPieces& p) {
+    for (int k = 0; k < kHudPieces; k++)
+        if (!p.rect[k].Empty() && (p.offset[k][0] != 0 || p.offset[k][1] != 0)) return true;
+    return false;
+}
+
+// the space kept between pieces in the image (texels the compositor's
+// filtering reads past a rectangle's edge), and PackHudPieces' search step
+inline constexpr float kPackGap = 0.006f;
+inline constexpr float kPackStep = 0.01f;
+
+// Each piece's place in the image (HudPieces::offset): the top strip where
+// it is, then the meter, the score and the rest each where it is unless that
+// overlaps one placed before it (kPackGap apart), else at the first place
+// that doesn't, scanning down the image from its top and across from its
+// left in kPackStep steps. A piece with a DrawRect quad stays (its rect isn't
+// moved), as does one with no free place.
+inline void PackHudPieces(HudPieces& p) {
+    const int order[kHudPieces] = {int(HudPiece::kTop), int(HudPiece::kMeter),
+                                   int(HudPiece::kScore), int(HudPiece::kRest)};
+    PictureRect placed[kHudPieces];
+    int count = 0;
+    auto free_at = [&](const PictureRect& r) {
+        for (int i = 0; i < count; i++) {
+            const PictureRect& o = placed[i];
+            if (r.u0 < o.u1 + kPackGap && o.u0 < r.u1 + kPackGap && r.v0 < o.v1 + kPackGap &&
+                o.v0 < r.v1 + kPackGap)
+                return false;
+        }
+        return true;
+    };
+    for (int k : order) {
+        p.offset[k][0] = p.offset[k][1] = 0;
+        const PictureRect& r = p.rect[k];
+        if (r.Empty()) continue;
+        if (!free_at(r) && p.rects[k] == 0) {
+            const float w = r.u1 - r.u0, h = r.v1 - r.v0;
+            bool found = false;
+            for (int y = 0; !found && y * kPackStep + h <= 1; y++)
+                for (int x = 0; !found && x * kPackStep + w <= 1; x++) {
+                    const float u = x * kPackStep, v = y * kPackStep;
+                    if (free_at({u, v, u + w, v + h})) {
+                        p.offset[k][0] = u - r.u0;
+                        p.offset[k][1] = v - r.v0;
+                        found = true;
+                    }
+                }
+        }
+        placed[count++] = ImageRect(p, k);
+    }
+}
 
 // the point of `r` a piece of `kind` hangs by (HudPieces::anchor)
 inline void HudAnchorOf(HudPiece kind, const PictureRect& r, float out[2]) {
@@ -217,11 +290,53 @@ inline HudPieces HudPiecesOf(const FrameCapture& fc, const RasterOptions& o) {
         const int k = int(HudPieceOf(r));
         p.rect[k] = Union(p.rect[k], r);
         p.draws[k]++;
+        if (it.rect_shader >= 0) p.rects[k]++;
     }
     for (int k = 0; k < kHudPieces; k++) HudAnchorOf(HudPiece(k), p.rect[k], p.anchor[k]);
     p.split =
         p.full == 0 && p.menu == 0 && p.rect[int(HudPiece::kRest)].Area() <= kHudRestMax;
+    PackHudPieces(p);
     return p;
+}
+
+// `in` with each HUD draw of a piece that's moved (HudPieces::offset) drawn
+// that far over in the image: its matrix followed by a move in clip space,
+// the offset over its camera's share of the picture (HudPiecesOf's draws, put
+// in pieces as there). DrawRect quads stay. `out` is a copy (RePose's kind);
+// `in` is left as it is.
+inline void ShiftHudPieces(const FrameCapture& in, const RasterOptions& o, const HudPieces& p,
+                           FrameCapture& out) {
+    out = in;
+    const uint32_t from = HudFrom(o, in);
+    if (from == 0 || from == FrameCapture::kNoPost) return;
+    for (size_t d = from; d < in.draws.size(); d++) {
+        const DrawItem& it = in.draws[d];
+        if (!DrawnToBackBuffer(it) || it.draw_mode != kDrawModeNormal || it.rect_shader >= 0 ||
+            !OnHud(o, in, d))
+            continue;
+        PictureRect r;
+        if (!HudDrawRect(in, it, r)) continue;
+        if (r.u1 - r.u0 >= kHudFull && r.v1 - r.v0 >= kHudFull) continue;
+        const int k = int(HudPieceOf(r));
+        if (p.offset[k][0] == 0 && p.offset[k][1] == 0) continue;
+        // the picture's u and v over the camera's viewport, in clip x and y
+        float tw = 1280, th = 720, vw = 1280, vh = 720;
+        const CameraView* view = it.cam ? CameraOf(in, it.cam) : nullptr;
+        if (!view && !in.cameras.empty()) view = &in.cameras[0];
+        if (view && view->target_w && view->target_h) {
+            tw = vw = float(view->target_w);
+            th = vh = float(view->target_h);
+            if (it.cam && view->cam == it.cam && view->viewport[2] > 0 && view->viewport[3] > 0) {
+                vw = view->viewport[2];
+                vh = view->viewport[3];
+            }
+        }
+        Mat4 move{};
+        for (int i = 0; i < 4; i++) move.m[i][i] = 1;
+        move.m[3][0] = 2 * p.offset[k][0] * tw / vw;
+        move.m[3][1] = -2 * p.offset[k][1] * th / vh;
+        out.draws[d].view_proj = freecam::Mul(it.view_proj, move);
+    }
 }
 
 // a frame that can't be split shows the whole panel once this many in a row
@@ -249,9 +364,11 @@ class HudPieceHold {
                 for (int c = 0; c < 2; c++) held_.anchor[k][c] = now.anchor[k][c];
             held_.rect[k] = Union(held_.rect[k], now.rect[k]);
             held_.draws[k] = now.draws[k];
+            held_.rects[k] = std::max(held_.rects[k], now.rects[k]);
         }
         held_.split = true;
         held_.full = held_.menu = 0;
+        PackHudPieces(held_);
         return held_;
     }
     void Reset() {
@@ -291,8 +408,9 @@ struct HudSplitLayout {
 
 struct HudPieceQuad {
     HudPiece kind = HudPiece::kRest;
-    PictureRect rect;  // of the HUD's image
-    HudQuad quad;      // where it hangs in LOCAL space, facing the head
+    PictureRect rect;   // of the game's picture
+    PictureRect image;  // of the panel's image (ImageRect), what its layer shows
+    HudQuad quad;       // where it hangs in LOCAL space, facing the head
 };
 
 // the frame's pieces: none (count 0) shows the whole panel (FrameLayout::
@@ -477,6 +595,10 @@ inline HudSplit PlaceHudPieces(const FrameLayout& l, const XrPose& head, const H
             PieceOnPlane(HudPiece::kRest, rest, a[0], a[1], l.hud_quad.pose.p, l.hud_quad.pose.q,
                          l.hud_quad.size[0], l.hud_quad.size[1]);
     }
+    // what each layer shows of the panel's image: its rectangle, moved
+    // where PackHudPieces drew it
+    for (int i = 0; i < out.count; i++)
+        out.piece[i].image = ImageRect(p, int(out.piece[i].kind));
     return out;
 }
 

@@ -1564,6 +1564,16 @@ class Renderer {
         const int hud_slot = GpuRenderer::HudSlot();
         const bool want_hud = REXCVAR_GET(vr_hud);
         if (!want_hud) vr_hud_frame_ = -1;
+        if (!in_song) {
+            vr_hud_hold_.Reset();
+            vr_hud_pieces_ = {};
+            vr_hud_moved_ = false;
+        }
+        const vr::XrPose head = f.have_head ? f.head : vr::HeadPose(f.pose[0], f.pose[1]);
+        const vr::HudSplitLayout split_layout = xr::HudSplitSettings();
+        // the panel's capture with its pieces moved apart (ShiftHudPieces),
+        // kept until the GPU's done with it, as the eyes' copies are
+        std::shared_ptr<FrameCapture> hud_moved;
         if (want_hud && int64_t(cap->frame) != vr_hud_frame_ && xs.HudFree()) {
             RasterOptions ho = eo;
             ho.part = BackBufferPart::kHud;
@@ -1572,25 +1582,32 @@ class Renderer {
             ho.width = xs.Width();
             ho.height = xs.Height();
             ScaleForPicture(ho);
-            hd.drew_output = GpuRenderer::Get().RenderFrameToOutput(*cap, ho, hud_slot, hd.out,
-                                                                   hd.gs);
+            // its pieces, which its image is cut into in songs (vr_hud_split),
+            // held through the song; where they overlap in the picture (four
+            // parts' vocals) and they're shown, drawn apart in the image
+            vr::HudPieces pieces;
+            if (in_song) pieces = vr_hud_hold_.Hold(vr::HudPiecesOf(*cap, ho));
+            if (vr::HudPiecesMoved(pieces) &&
+                vr::PlaceHudPieces(layout, head, pieces, split_layout).count > 0) {
+                hud_moved = std::make_shared<FrameCapture>();
+                vr::ShiftHudPieces(*cap, ho, pieces, *hud_moved);
+            }
+            hd.drew_output = GpuRenderer::Get().RenderFrameToOutput(
+                hud_moved ? *hud_moved : *cap, ho, hud_slot, hd.out, hd.gs);
             if (hd.drew_output) {
                 vr_hud_frame_ = int64_t(cap->frame);
                 t.hud = true;
                 t.hud_submitted_ms = at();
-                // the picture's pieces, which its image is cut into in songs
-                // (vr_hud_split), held through the song
-                if (in_song) vr_hud_pieces_ = vr_hud_hold_.Hold(vr::HudPiecesOf(*cap, ho));
+                vr_hud_pieces_ = pieces;
+                vr_hud_moved_ = hud_moved != nullptr;
             }
         }
-        if (!in_song) {
-            vr_hud_hold_.Reset();
-            vr_hud_pieces_ = {};
-        }
-        // where they hang this frame (none: the whole panel)
-        const vr::HudSplit split = vr::PlaceHudPieces(
-            layout, f.have_head ? f.head : vr::HeadPose(f.pose[0], f.pose[1]), vr_hud_pieces_,
-            xr::HudSplitSettings());
+        // where they hang this frame (none: the whole panel); an image whose
+        // pieces were moved apart keeps the pieces last shown until the next
+        // picture, as the whole panel it'd be wrong
+        vr::HudSplit split = vr::PlaceHudPieces(layout, head, vr_hud_pieces_, split_layout);
+        if (split.count == 0 && vr_hud_moved_) split = vr_hud_split_;
+        vr_hud_split_ = split;
         // Each finished on SDL's queue before the SDK's samples it: the SDK's
         // queue waits for SDL_gpu's fences (GpuRenderer::OutputFence) before
         // its copies, so the images go to the runtime without the CPU waiting
@@ -1744,6 +1761,10 @@ class Renderer {
     // (vr_hud_hold_, Reset outside songs), which vr_hud_split cuts it into
     vr::HudPieces vr_hud_pieces_;
     vr::HudPieceHold vr_hud_hold_;
+    // the picture was drawn with its pieces moved apart (vr::ShiftHudPieces),
+    // and the pieces last shown
+    bool vr_hud_moved_ = false;
+    vr::HudSplit vr_hud_split_;
     // vr_gpu_queue_wait found no fence to wait on, logged once
     bool vr_fence_logged_ = false;
     // the game's cap for VR as last set (pacing::SetVrCap), none set

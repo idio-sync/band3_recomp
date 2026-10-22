@@ -199,6 +199,7 @@
 //     src/Render/vr_pose.cpp -o out/native_view_replay.exe
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -1204,7 +1205,23 @@ void ApplyFreeCam(FrameCapture& fc, bool move, const float eye[3], const float a
 // piece's rectangle of the picture (u, v from its top left, 0..1) and draws;
 // with `each`, every draw's rectangle and piece
 vr::HudPieces PrintHudPieces(const FrameCapture& fc, const RasterOptions& ho, bool each) {
-    const vr::HudPieces p = vr::HudPiecesOf(fc, ho);
+    // what finding them costs (VrFrame's, once per new panel picture): the
+    // mean of 200 goes
+    const auto start = std::chrono::steady_clock::now();
+    vr::HudPieces p;
+    for (int i = 0; i < 200; i++) p = vr::HudPiecesOf(fc, ho);
+    const double find_ms =
+        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start)
+            .count() /
+        200;
+    // and drawing them apart (ShiftHudPieces' copy), where they overlap
+    const auto copy_start = std::chrono::steady_clock::now();
+    FrameCapture moved;
+    for (int i = 0; i < 20; i++) vr::ShiftHudPieces(fc, ho, p, moved);
+    const double shift_ms =
+        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - copy_start)
+            .count() /
+        20;
     if (each) {
         for (size_t d = HudFrom(ho, fc); d < fc.draws.size(); d++) {
             const DrawItem& it = fc.draws[d];
@@ -1221,13 +1238,16 @@ vr::HudPieces PrintHudPieces(const FrameCapture& fc, const RasterOptions& ho, bo
                             : vr::HudPieceName(vr::HudPieceOf(r)));
         }
     }
-    std::printf("hud pieces: %s (%u draws over the whole picture, %u of a menu)",
-                p.split ? "split" : "whole", p.full, p.menu);
+    std::printf("hud pieces: %s (%u draws over the whole picture, %u of a menu; found in %.3f "
+                "ms, %s, drawn apart in %.3f ms)",
+                p.split ? "split" : "whole", p.full, p.menu, find_ms,
+                vr::HudPiecesMoved(p) ? "moved apart" : "none moved", shift_ms);
     for (int k = 0; k < vr::kHudPieces; k++) {
         const vr::PictureRect& r = p.rect[k];
         if (r.Empty()) continue;
-        std::printf("; %s u %.3f..%.3f v %.3f..%.3f (%u draws)", vr::HudPieceName(vr::HudPiece(k)),
-                    r.u0, r.u1, r.v0, r.v1, p.draws[k]);
+        std::printf("; %s u %.3f..%.3f v %.3f..%.3f (%u draws) at %+.3f,%+.3f in the image",
+                    vr::HudPieceName(vr::HudPiece(k)), r.u0, r.u1, r.v0, r.v1, p.draws[k],
+                    p.offset[k][0], p.offset[k][1]);
     }
     std::printf("\n");
     return p;
