@@ -49,7 +49,10 @@ For each name this:
              the eyes faded by `fade`, the dark at `dim` around the window
              (with `frame_layers`, vr_window_quads; else the eyes drew it),
              and the panel's picture (premultiplied) over it where `hud_px`
-             says
+             says; or in songs with vr_hud_split its pieces (`hud_split`:
+             each one's rectangle of the picture where its `px` says, listed
+             with where it hangs from the head), and <name>.vr.pieces.png,
+             the same with each piece's quad outlined
 
 It exits 1 when a window's mean is over --max-mean (6), a black eye isn't, or
 a track check fails.
@@ -64,7 +67,7 @@ import os
 import sys
 
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageDraw
 
 
 def load(path):
@@ -123,29 +126,86 @@ def window_mask(shape, corners):
     return left | right
 
 
+def texels(rect, w, h):
+    """a piece's rectangle (u0, v0, u1, v1) of a w x h image in whole texels,
+    outward, as vr_hud.h's PieceTexels"""
+    x0, y0 = int(np.floor(rect[0] * w)), int(np.floor(rect[1] * h))
+    x1, y1 = int(np.ceil(rect[2] * w)), int(np.ceil(rect[3] * h))
+    return max(0, x0), max(0, y0), min(w, x1), min(h, y1)
+
+
+def over(out, hud, box, corners):
+    """the rectangle `box` (x0, y0, x1, y1) of the panel's picture `hud`
+    (premultiplied) put over `out` on the quad `corners`, as a quad layer"""
+    x0, y0, x1, y1 = box
+    coeffs = perspective_coeffs(corners, [(x0, y0), (x1, y0), (x1, y1), (x0, y1)])
+    h, w = out.shape[:2]
+    warped = np.asarray(hud.transform((w, h), Image.PERSPECTIVE, tuple(coeffs), Image.BILINEAR),
+                        dtype=np.float32)
+    # outside the quad the transform samples nothing: transparent
+    warped = warped * window_mask(out.shape, corners)[..., None]
+    a = warped[..., 3:4] / 255
+    return warped[..., :3] + out * (1 - a)
+
+
 def simulate(prefix, layout, left):
-    """the left eye as the compositor shows it: fade, dark, panel"""
+    """the left eye as the compositor shows it: fade, dark, panel or its pieces
+    (vr_hud_split), each outlined in <name>.vr.pieces.png"""
     out = left[..., :3] * (1 - layout["fade"])
     if layout["eyes_black"]:
         out[:] = 0
+    # the layout's pixels are the headset's image's (`eye_size`); the eye's
+    # picture is drawn smaller from a fixed viewpoint (vr_eye_scale)
+    scale = (out.shape[1] / layout["eye_size"][0], out.shape[0] / layout["eye_size"][1])
+
+    def scaled(corners):
+        return [None if c is None else [c[0] * scale[0], c[1] * scale[1]] for c in corners]
+
     # the dark as quad layers (vr_window_quads); else the eyes drew it
     if layout["window"] and layout["frame_quads"] > 0 and layout.get("frame_layers", True):
-        inside = window_mask(out.shape, layout.get("picture_px") or layout["window_px"])
+        inside = window_mask(out.shape, scaled(layout.get("picture_px") or layout["window_px"]))
         out[~inside] *= 1 - layout["dim"]
     hud_path = prefix + ".gpu.hud.png"
-    corners = layout.get("hud_px") or []
-    if layout["hud"] != "off" and os.path.exists(hud_path) and None not in corners:
+    corners = scaled(layout.get("hud_px") or [])
+    split = layout.get("hud_split") or {"count": 0, "pieces": []}
+    shown = []
+    if layout["hud"] != "off" and os.path.exists(hud_path):
         hud = Image.open(hud_path).convert("RGBA")
-        coeffs = perspective_coeffs(corners, [(0, 0), (hud.width, 0), (hud.width, hud.height),
-                                              (0, hud.height)])
-        h, w = out.shape[:2]
-        warped = np.asarray(hud.transform((w, h), Image.PERSPECTIVE, tuple(coeffs),
-                                          Image.BILINEAR), dtype=np.float32)
-        # outside the quad the transform samples nothing: transparent
-        warped = warped * window_mask(out.shape, corners)[..., None]
-        a = warped[..., 3:4] / 255
-        out = warped[..., :3] + out * (1 - a)
+        if split["count"] > 0:
+            for p in split["pieces"]:
+                px = scaled(p["px"])
+                if None in px:
+                    continue
+                out = over(out, hud, texels(p.get("image", p["rect"]), hud.width, hud.height), px)
+                shown.append(px)
+        elif None not in corners:
+            out = over(out, hud, (0, 0, hud.width, hud.height), corners)
     Image.fromarray(np.clip(out, 0, 255).astype(np.uint8)).save(prefix + ".vr.sim.png")
+    if shown:
+        # each piece's quad outlined, to see where they hang
+        img = Image.fromarray(np.clip(out, 0, 255).astype(np.uint8))
+        draw = ImageDraw.Draw(img)
+        for c in shown:
+            draw.polygon([tuple(x) for x in c], outline=(255, 0, 255))
+        img.save(prefix + ".vr.pieces.png")
+
+
+def split_report(layout):
+    """the panel's pieces (vr_hud_split): each one's rectangle of the picture
+    and where it hangs"""
+    split = layout.get("hud_split")
+    if not split or not split["count"]:
+        print("  hud split: none (the whole panel)")
+        return
+    print(f"  hud split: {split['count']} pieces, the meter and score "
+          f"{'beside the tracks' if split['beside'] else 'above their middle'}")
+    for p in split["pieces"]:
+        f = p["from_head"]
+        away = float(np.linalg.norm(f))
+        print(f"    {p['kind']}: u {p['rect'][0]:.3f}..{p['rect'][2]:.3f} v {p['rect'][1]:.3f}.."
+              f"{p['rect'][3]:.3f}, {p['size'][0]:.3f} x {p['size'][1]:.3f} m, {f[0]:.2f} m ahead, "
+              f"{f[1]:.2f} below, {f[2]:.2f} across ({away:.2f} m away, "
+              f"{np.degrees(2 * np.arctan2(p['size'][0] / 2, away)):.1f} degrees wide)")
 
 
 def track_check(prefix, layout):
@@ -261,6 +321,7 @@ def check(prefix, max_mean):
               f"{cost['gpu_ms']:.2f} ms, {cost['draws']} draws, {cost['crowd_cleared']} crowd "
               f"draws cleared near the eye")
     ok &= track_check(prefix, layout)
+    split_report(layout)
     simulate(prefix, layout, left)
     return ok
 

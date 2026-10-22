@@ -158,10 +158,17 @@ double CpThreadMs() {
 // the panel's corners in the left eye's picture (pixels from
 // its top left: top left, top right, bottom right, bottom left; [] for no
 // window, null for a corner behind the eye), the tracks' (`tracks`, below);
-// with `centre`, the same corners in its picture (`centre`: .gpu.C.png's eye)
+// with `centre`, the same corners in its picture (`centre`: .gpu.C.png's eye);
+// and the panel in pieces (`hud_split`, vr_hud_split's: vr_hud.h's HudSplit
+// of this one frame), each piece's kind, its rectangle of the panel's picture
+// (u0, v0, u1, v1 from its top left, 0..1) and of the panel's image (`image`:
+// moved apart where they overlap), its size and pose, its middle
+// from the head (ahead, below, across: `from_head`, metres), and its corners
+// in the left eye's picture as the panel's
 std::string VrLayoutJson(const render::vr::FrameLayout& l, const render::xr::FrameViews& views,
                          bool headset, float fade, uint32_t eye_w, uint32_t eye_h,
-                         const render::xr::FrameViews* centre, uint32_t centre_size) {
+                         const render::xr::FrameViews* centre, uint32_t centre_size,
+                         const render::vr::HudSplit& split) {
     auto pose = [](const render::vr::XrPose& p) {
         return std::format("{{\"p\":[{:.4f},{:.4f},{:.4f}],\"q\":[{:.4f},{:.4f},{:.4f},{:.4f}]}}",
                            p.p[0], p.p[1], p.p[2], p.q[0], p.q[1], p.q[2], p.q[3]);
@@ -225,6 +232,28 @@ std::string VrLayoutJson(const render::vr::FrameLayout& l, const render::xr::Fra
                               t ? "," : "", p.cam.cam, eye_px, panel_px);
     }
     tracks += "]";
+    const render::vr::XrPose head =
+        views.have_head ? views.head : render::vr::HeadPose(views.pose[0], views.pose[1]);
+    std::string pieces = "[";
+    for (int i = 0; i < split.count; i++) {
+        const render::vr::HudPieceQuad& q = split.piece[i];
+        const float* c = q.quad.pose.p;
+        const float yaw = render::vr::HeadYaw(head);
+        const float d[3] = {c[0] - head.p[0], c[1] - head.p[1], c[2] - head.p[2]};
+        pieces += std::format(
+            "{}{{\"kind\":\"{}\",\"rect\":[{:.4f},{:.4f},{:.4f},{:.4f}],"
+            "\"image\":[{:.4f},{:.4f},{:.4f},{:.4f}],\"size\":[{:.4f},{:.4f}],"
+            "\"pose\":{},\"from_head\":[{:.3f},{:.3f},{:.3f}],\"px\":{}}}",
+            i ? "," : "", render::vr::HudPieceName(q.kind), q.rect.u0, q.rect.v0, q.rect.u1,
+            q.rect.v1, q.image.u0, q.image.v0, q.image.u1, q.image.v1, q.quad.size[0],
+            q.quad.size[1], pose(q.quad.pose),
+            -d[0] * std::sin(yaw) - d[2] * std::cos(yaw), -d[1],
+            d[0] * std::cos(yaw) - d[2] * std::sin(yaw), pixels(q.quad, views, eye_w, eye_h));
+    }
+    pieces += "]";
+    const std::string split_json =
+        std::format("{{\"count\":{},\"beside\":{},\"pieces\":{}}}", split.count,
+                    split.beside ? "true" : "false", pieces);
     std::string centre_json;
     if (centre)
         centre_json = std::format(
@@ -242,7 +271,7 @@ std::string VrLayoutJson(const render::vr::FrameLayout& l, const render::xr::Fra
         "\"window_pose\":{},\"head\":{},\"hud\":\"{}\",\"hud_size\":[{:.4f},{:.4f}],"
         "\"hud_pose\":{},\"frame_quads\":{},\"frame_layers\":{},\"dim\":{:.3f},"
         "\"eye_size\":[{},{}],\"window_px\":{},\"picture_px\":{},\"hud_px\":{},"
-        "\"tracks\":{}{}}}",
+        "\"tracks\":{},\"hud_split\":{}{}}}",
         headset ? "headset" : "stand_in", l.hud_boundary, l.window ? "true" : "false",
         l.eyes_black ? "true" : "false", fade, l.game_fov.hfov * 57.2957795f,
         l.game_fov.vfov * 57.2957795f,
@@ -252,7 +281,7 @@ std::string VrLayoutJson(const render::vr::FrameLayout& l, const render::xr::Fra
         l.frame_quads, l.frame_layers ? "true" : "false", l.dim, eye_w, eye_h,
         l.window ? pixels(window, views, eye_w, eye_h) : "[]",
         l.window ? pixels(picture, views, eye_w, eye_h) : "[]",
-        pixels(l.hud_quad, views, eye_w, eye_h), tracks, centre_json);
+        pixels(l.hud_quad, views, eye_w, eye_h), tracks, split_json, centre_json);
 }
 
 // how often the server thread looks up from its sockets to see if it should stop
@@ -585,8 +614,18 @@ public:
                 centre.fov[e] = {-kHalf, kHalf, kHalf, -kHalf};
             }
         }
+        // the panel in pieces as VrFrame cuts it (vr_hud_split), from this
+        // frame alone (VrFrame holds them through the song)
+        render::RasterOptions po;
+        po.hud_from = layout.hud_boundary;
+        render::vr::EyeCamsOf(layout, po.eye_cams, render::RasterOptions::kEyeCams);
+        const render::vr::XrPose head =
+            views.have_head ? views.head : render::vr::HeadPose(views.pose[0], views.pose[1]);
+        const render::vr::HudPieces pieces = render::vr::HudPiecesOf(frame, po);
+        const render::vr::HudSplit split =
+            render::vr::PlaceHudPieces(layout, head, pieces, render::xr::HudSplitSettings());
         vr = VrLayoutJson(layout, views, headset, fade, eye_w, eye_h,
-                          with_centre ? &centre : nullptr, kCentreSize);
+                          with_centre ? &centre : nullptr, kCentreSize, split);
         render::RasterOptions eo = options;
         // at vr_eye_scale or vr_window_eye_scale of the headset's size, as
         // VrFrame draws them (their PNGs that size)
@@ -993,9 +1032,15 @@ public:
             ho.width = eye_w;
             ho.height = eye_h;
             render::ScaleForPicture(ho);
+            // with its pieces moved apart where VrFrame would (four parts'
+            // vocals over the score: vr::ShiftHudPieces)
+            render::FrameCapture moved;
+            const bool shift = split.count > 0 && render::vr::HudPiecesMoved(pieces);
+            if (shift) render::vr::ShiftHudPieces(frame, ho, pieces, moved);
             std::vector<uint32_t> hud_rgba;
             render::GpuStats hud_stats;
-            if (render::GpuRenderer::Get().RenderFrame(frame, ho, hud_rgba, hud_stats))
+            if (render::GpuRenderer::Get().RenderFrame(shift ? moved : frame, ho, hud_rgba,
+                                                       hud_stats))
                 render::WritePng((rex::filesystem::GetExecutableFolder() / "screenshots" /
                                   (file + ".gpu.hud.png"))
                                      .string(),

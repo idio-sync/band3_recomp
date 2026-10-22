@@ -722,6 +722,62 @@ What each does, how it was measured and why it defaults as it does. The
   CPU (RePose 0.04-0.11 of it) in four song captures (2026-10-18, no headset). `native_view_replay --track-at x,y,z` draws both eyes
   without a headset (a stand-in head moved by x,y,z for the parallax) and prints where
   each track is; `--list` prints the track cameras, `--track-eyes` splits by them.
+  The HUD in pieces (`vr_hud_split`, on; `vr_hud.h`): on the user's first Steam Frame run
+  (2026-10-21) the 3D highway looked right but the flat HUD didn't, one panel 1.8 m away that
+  the track runs through (0.5 to 4.7 m) with the venue behind it, so the eyes couldn't settle
+  on it and the gems at once. Now in songs with the tracks in front the panel's one picture
+  is cut into pieces, each an `XrCompositionLayerQuad` of its rectangle of the panel's image
+  (`subImage.imageRect`, whole texels: `PieceTexels`), no new swapchain or drawing; with the
+  dark's nine (`vr_window_quads`) that's 1 + 9 + 4 layers at most, of the 16 OpenXR promises.
+  `HudPiecesOf` takes each of the panel's draws that shows something (not blended away: the
+  fade's quad at alpha 0) and its rectangle of the picture (its vertices through its camera's
+  viewport, padded 0.004), and puts it in a piece by where it is (`HudPieceOf`): the band
+  meter's wholly left of u 0.2, its middle below v 0.3; the score's (box, stars, progress bar,
+  time) wholly right of u 0.72, its middle right of 0.775 (the song's title's lines end at
+  0.773, right-aligned against it, however short) and between v 0.15 and 0.6; the top strip's
+  with its middle above v 0.45 (the lyrics, the vocals' strip and its pills, the title, a
+  Unison Bonus's banner); else the rest's. A draw over the whole picture (the fade at work), a
+  draw of a 0..1 camera after the flat HUD's (the pause menu's) or a rest over 0.1 of the
+  picture keeps the panel whole. On the captures (`native_view_replay <cap> x.png
+  --overlay-only --track-eyes --hud-pieces`) one player's (trk_a), two players'
+  (screen-mp2-25s) and four parts' (screen-mp4-10s, -25s) split into meter, score and top with
+  nothing left over, and the three pause menus stayed whole; finding them took 0.010-0.021 ms.
+  `HudPieceHold` keeps each piece's union through the song (`VrFrame`'s `vr_hud_pieces_`,
+  reset outside songs), so a piece never shrinks as lyrics' lines change, and hangs it by the
+  anchor it first had (the meter's bottom right corner, the score's bottom left, the top's
+  bottom edge at the picture's middle), so nothing in it moves as it grows; a frame that can't
+  be split shows the whole panel once three come in a row. `PlaceHudPieces` hangs them from
+  the recentred head, each facing it, level, at the size it'd be in the whole picture
+  `vr_hud_piece_width` (55, the panel's) degrees across from where it hangs: the meter's
+  corner `vr_hud_side_gap` (0.05 m) left of the leftmost track's edge at its strikeline and
+  the score's as far right of the rightmost's, at the strikeline's height; where either's
+  middle would be over `vr_hud_side_max` (40) degrees aside, both above the tracks' middle,
+  the gap apart, their bottoms 13 degrees over every track's far end seen from the head (each
+  track's instrument badge stands there; just clearing the far end covered four parts'
+  middle badge, as did 8 degrees); the top
+  strip's bottom middle `vr_lyrics_height` (0.05 m) over the window's top edge's middle, or
+  from a fixed viewpoint `vr_lyrics_distance` (2.5 m) ahead and `vr_lyrics_elevation` (20)
+  degrees up; the rest where the panel would have it. Menus, the pause menu, `vr_hud_in_window`
+  and songs without the 3D track keep the whole panel. A quad shows a rectangle of the
+  image, and four parts' vocals' strip runs over the score box's and meter's tops, so
+  `PackHudPieces` gives each piece a place in the image (where it is unless that overlaps one
+  placed before it, else the first free place) and `VrFrame` draws the panel from a copy of
+  the capture with the moved pieces' draws shifted in clip space (`ShiftHudPieces`, 0.02-0.15
+  ms on the captures; one player's score moves too, its progress icon's box meeting the
+  title's at a corner); the layer shows the piece's image rectangle. At the defaults, from
+  the head (stand-in, 2026-10-21, `out/vr/hud_split_eyes.b3t` and `hud_split_song.b3t` in the
+  VR worktree): one player's meter 0.07 x 0.29 m (2.9 x 12.7 degrees) 1.22 m ahead, 0.42 m
+  left, its middle 0.16 m below the eyes, the score 0.29 x 0.15 m 0.52 m right and 0.23 below
+  (both 1.3 m away, as the strikeline), the lyrics and title 0.66 x 0.27 m, 2.2 m away, 1.37 m
+  up through the window (38 degrees) or 2.4 m ahead and 1.06 m up from a fixed viewpoint;
+  two players' and four parts' meter and score at the tracks' middle 1.2 m ahead, over their
+  badges, four parts' vocals' strip 2.2 x 0.44 m (53 degrees) above the window. Finding the
+  pieces took 0.01-0.03 ms a picture.
+  The capture's `vr` JSON has the frame's pieces (`hud_split`: each one's rectangle, size,
+  pose, middle from the head and corners in the left eye), which `tools/vr_window_check.py`
+  lists and puts into `<name>.vr.sim.png` (and outlined in `.vr.pieces.png`); `native_view
+  stats`' `xr` block's `hud` counts `split_frames` and `pieces_per_split_frame`, and the log
+  says where they hang as they first show (`vr: the HUD in 3 pieces, ...`).
   Each runtime frame's timing (`vr_timing.h`'s `FrameTiming`) is kept in a ring of the last
   8,192 (about 68 s at 120 Hz), which the harness's `vr_frames [name]` writes as CSV to
   `logs/vr_frames-<name>.csv` beside the exe: in ms from xrWaitFrame's return, xrBeginFrame's
